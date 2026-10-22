@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build and package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p dist/package
+          binary=amonhen
+          if [ "$GOOS" = windows ]; then binary=amonhen.exe; fi
+          go build -buildvcs=false -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "dist/package/$binary" ./cmd/amonhen
+          cp README.md LICENSE dist/package/
+          if [ "$GOOS" = windows ]; then cp uninstall.ps1 dist/package/; else cp uninstall.sh dist/package/; fi
+          archive="amonhen_${VERSION}_${GOOS}_${GOARCH}.zip"
+          (cd dist/package && zip -q -r "../$archive" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/amonhen_*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: package-*
+          merge-multiple: true
+      - name: Create release and attach packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          cd dist
+          sha256sum *.zip > SHA256SUMS
+          gh release create "$VERSION" *.zip SHA256SUMS --verify-tag --generate-notes
