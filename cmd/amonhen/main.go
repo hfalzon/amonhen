@@ -75,11 +75,13 @@ func isHelp(arg string) bool { return arg == "--help" || arg == "-h" }
 func helpText(topic string) string {
 	switch topic {
 	case "project":
-		return "Usage: amonhen project <add|list|delete>\n\nOptions:\n  -h, --help  Show this help\n"
+		return "Usage: amonhen project <add|list|uuid|delete>\n\nOptions:\n  -h, --help  Show this help\n"
 	case "project add":
 		return "Usage: amonhen project add -N <name> -U <BWS-project-UUID> -T\n\nAdd a project. -T prompts for its machine-account token without echo; raw tokens are not accepted as arguments.\n\nOptions:\n  -N, --name   Unique local project name\n  -U, --uuid   Bitwarden Secrets Manager project UUID\n  -T, --token  Prompt securely for the project machine-account token\n  -h, --help   Show this help\n"
 	case "project list":
 		return "Usage: amonhen project list (alias: amonhen ls)\n\nShow configured project names and BWS project UUIDs. Tokens are never listed.\n\nOptions:\n  -h, --help  Show this help\n"
+	case "project uuid":
+		return "Usage: amonhen project uuid -N <project-name>\n\nPrint the BWS project UUID for the named project.\n\nOptions:\n  -N, --name  Select the Amon Hen project\n  -h, --help  Show this help\n"
 	case "project delete":
 		return "Usage: amonhen project delete (-N <name> | -U <BWS-project-UUID>)\n\nDelete one project and its stored machine-account token.\n\nOptions:\n  -N, --name  Select by local project name\n  -U, --uuid  Select by BWS project UUID\n  -h, --help  Show this help\n"
 	case "run":
@@ -90,7 +92,7 @@ func helpText(topic string) string {
 		if topic == "token" {
 			return "Usage: amonhen token -N <project-name> -- <command> [args...]\n\nRun a child process with that project's stored BWS machine token in BWS_ACCESS_TOKEN. Amon Hen does not print the token. The child process can read it.\n\nOptions:\n  -N, --name  Select the project whose token to pass\n  -h, --help  Show this help\n"
 		}
-		return "Amon Hen — scoped Bitwarden Secrets Manager launcher\n\nUsage:\n  amonhen project add -N <name> -U <BWS-project-UUID> -T\n  amonhen project list\n  amonhen ls\n  amonhen project delete -N <name>\n  amonhen project delete -U <BWS-project-UUID>\n  amonhen token -N <project-name> -- <command> [args...]\n  amonhen run <project-name> -- <command> [args...]\n  amonhen install\n  amonhen version | -V | --version\n\nProject tokens are stored in the OS credential store and never displayed by Amon Hen.\nOptions: -h, --help show help for a command.\n"
+		return "Amon Hen — manage Bitwarden Secrets Manager machine-account keys\n\nUsage:\n  amonhen project add -N <name> -U <BWS-project-UUID> -T\n  amonhen project list\n  amonhen project uuid -N <name>\n  amonhen ls\n  amonhen project delete -N <name>\n  amonhen project delete -U <BWS-project-UUID>\n  amonhen token -N <project-name> -- <command> [args...]\n  amonhen run <project-name> -- <command> [args...]\n  amonhen install\n  amonhen version | -V | --version\n\nProject tokens are stored in the OS credential store and never displayed by Amon Hen.\nOptions: -h, --help show help for a command.\n"
 	}
 }
 
@@ -166,7 +168,7 @@ func installCommand(args []string) error {
 
 func projectCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: amonhen project <add|list|delete> (use --help for details)")
+		return errors.New("usage: amonhen project <add|list|uuid|delete> (use --help for details)")
 	}
 	if args[0] == "--help" || args[0] == "-h" {
 		fmt.Print(helpText("project"))
@@ -181,6 +183,12 @@ func projectCommand(args []string) error {
 		return addProject(args[1:])
 	case "list":
 		return listProjects(args[1:])
+	case "uuid":
+		if containsHelp(args[1:]) {
+			fmt.Print(helpText("project uuid"))
+			return nil
+		}
+		return projectUUID(args[1:])
 	case "delete":
 		if containsHelp(args[1:]) {
 			fmt.Print(helpText("project delete"))
@@ -188,8 +196,30 @@ func projectCommand(args []string) error {
 		}
 		return deleteProject(args[1:])
 	default:
-		return errors.New("usage: amonhen project <add|list|delete> (use --help for details)")
+		return errors.New("usage: amonhen project <add|list|uuid|delete> (use --help for details)")
 	}
+}
+
+func projectUUID(args []string) error {
+	opts, err := parseOptions(args, map[string]bool{"name": true})
+	if err != nil {
+		return err
+	}
+	name := opts["name"]
+	if !validName(name) {
+		return errors.New("a valid project name is required with -N")
+	}
+	projects, err := loadProjects()
+	if err != nil {
+		return err
+	}
+	for _, project := range projects {
+		if project.Name == name {
+			fmt.Println(project.UUID)
+			return nil
+		}
+	}
+	return fmt.Errorf("project %q not found", name)
 }
 
 func containsHelp(args []string) bool {

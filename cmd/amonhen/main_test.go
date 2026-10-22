@@ -61,7 +61,7 @@ func TestBWSAccessTokenIsOnlyAddedToBWSProcessEnvironment(t *testing.T) {
 }
 
 func TestHelpIsAvailableAtEveryCommandPath(t *testing.T) {
-	cases := [][]string{{"--help"}, {"project", "--help"}, {"project", "add", "--help"}, {"project", "add", "-N", "demo", "-h"}, {"project", "list", "--help"}, {"project", "delete", "--help"}, {"token", "--help"}, {"token", "-h", "--", "command"}, {"ls", "--help"}, {"install", "--help"}, {"run", "--help"}}
+	cases := [][]string{{"--help"}, {"project", "--help"}, {"project", "add", "--help"}, {"project", "add", "-N", "demo", "-h"}, {"project", "list", "--help"}, {"project", "uuid", "--help"}, {"project", "delete", "--help"}, {"token", "--help"}, {"token", "-h", "--", "command"}, {"ls", "--help"}, {"install", "--help"}, {"run", "--help"}}
 	for _, args := range cases {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			output, err := captureRun(args)
@@ -116,5 +116,20 @@ func TestListShowsNamesAndUUIDsButNoToken(t *testing.T) {
 	}
 	if strings.Contains(output, "token") || !strings.Contains(output, "local-dev") || !strings.Contains(output, "12345678-1234-4123-8123-123456789abc") {
 		t.Fatalf("list output = %q", output)
+	}
+}
+
+func TestProjectUUIDLookupByName(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const uuid = "12345678-1234-4123-8123-123456789abc"
+	if err := saveProjects([]Project{{Name: "local-dev", UUID: uuid}}); err != nil {
+		t.Fatal(err)
+	}
+	output, err := captureRun([]string{"project", "uuid", "-N", "local-dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != uuid+"\n" {
+		t.Fatalf("UUID lookup output = %q, want %q", output, uuid+"\n")
 	}
 }

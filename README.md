@@ -68,6 +68,16 @@ amonhen ls
 The output contains each project's local name and BWS project UUID. It never
 shows the machine-account token.
 
+Look up a project's UUID by its Amon Hen name:
+
+```text
+amonhen project uuid -N local-dev
+```
+
+This prints the UUID only. To pass the project's machine-account token to a
+child process without printing it, use the `amonhen token -N ... -- <command>`
+form below.
+
 Delete by the local name or the BWS project UUID:
 
 ```text
@@ -113,6 +123,7 @@ Amon Hen does not fetch or store individual secret values.
 amonhen --help
 amonhen project add --help
 amonhen project list --help
+amonhen project uuid --help
 amonhen project delete --help
 amonhen token --help
 amonhen run --help
