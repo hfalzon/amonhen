@@ -80,6 +80,5 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           set -eu
-          cd dist
-          sha256sum *.zip > SHA256SUMS
-          gh release create "$VERSION" *.zip SHA256SUMS --verify-tag --generate-notes
+          sha256sum dist/*.zip > dist/SHA256SUMS
+          gh release create "$VERSION" dist/*.zip dist/SHA256SUMS --verify-tag --generate-notes
