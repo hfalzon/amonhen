@@ -1,4 +1,4 @@
-module github.com/amonhen/amonhen
+module github.com/hfalzon/amonhen
 
 go 1.23
 
