@@ -61,7 +61,7 @@ func TestBWSAccessTokenIsOnlyAddedToBWSProcessEnvironment(t *testing.T) {
 }
 
 func TestHelpIsAvailableAtEveryCommandPath(t *testing.T) {
-	cases := [][]string{{"--help"}, {"project", "--help"}, {"project", "add", "--help"}, {"project", "add", "-N", "demo", "-h"}, {"project", "list", "--help"}, {"project", "delete", "--help"}, {"ls", "--help"}, {"install", "--help"}, {"run", "--help"}}
+	cases := [][]string{{"--help"}, {"project", "--help"}, {"project", "add", "--help"}, {"project", "add", "-N", "demo", "-h"}, {"project", "list", "--help"}, {"project", "delete", "--help"}, {"token", "--help"}, {"token", "-h", "--", "command"}, {"ls", "--help"}, {"install", "--help"}, {"run", "--help"}}
 	for _, args := range cases {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			output, err := captureRun(args)

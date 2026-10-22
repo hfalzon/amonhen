@@ -50,6 +50,8 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "token":
+		return tokenCommand(args[1:])
 	case "project":
 		return projectCommand(args[1:])
 	case "ls", "list":
@@ -85,8 +87,70 @@ func helpText(topic string) string {
 	case "install":
 		return "Usage: amonhen install\n\nInstall this executable for the current user and add its directory to PATH.\n\nOptions:\n  -h, --help  Show this help\n"
 	default:
-		return "Amon Hen — scoped Bitwarden Secrets Manager launcher\n\nUsage:\n  amonhen project add -N <name> -U <BWS-project-UUID> -T\n  amonhen project list\n  amonhen ls\n  amonhen project delete -N <name>\n  amonhen project delete -U <BWS-project-UUID>\n  amonhen run <project-name> -- <command> [args...]\n  amonhen install\n  amonhen version | -V | --version\n\nProject tokens are stored in the OS credential store and never displayed.\nOptions: -h, --help show help for a command.\n"
+		if topic == "token" {
+			return "Usage: amonhen token -N <project-name> -- <command> [args...]\n\nRun a child process with that project's stored BWS machine token in BWS_ACCESS_TOKEN. Amon Hen does not print the token. The child process can read it.\n\nOptions:\n  -N, --name  Select the project whose token to pass\n  -h, --help  Show this help\n"
+		}
+		return "Amon Hen — scoped Bitwarden Secrets Manager launcher\n\nUsage:\n  amonhen project add -N <name> -U <BWS-project-UUID> -T\n  amonhen project list\n  amonhen ls\n  amonhen project delete -N <name>\n  amonhen project delete -U <BWS-project-UUID>\n  amonhen token -N <project-name> -- <command> [args...]\n  amonhen run <project-name> -- <command> [args...]\n  amonhen install\n  amonhen version | -V | --version\n\nProject tokens are stored in the OS credential store and never displayed by Amon Hen.\nOptions: -h, --help show help for a command.\n"
 	}
+}
+
+func tokenCommand(args []string) error {
+	separator := -1
+	for i, arg := range args {
+		if arg == "--" {
+			separator = i
+			break
+		}
+	}
+	optionArgs := args
+	if separator >= 0 {
+		optionArgs = args[:separator]
+	}
+	if containsHelp(optionArgs) {
+		fmt.Print(helpText("token"))
+		return nil
+	}
+	if separator < 0 || separator+1 >= len(args) {
+		return errors.New("usage: amonhen token -N <project-name> -- <command> [args...] (use --help for details)")
+	}
+	opts, err := parseOptions(args[:separator], map[string]bool{"name": true})
+	if err != nil {
+		return err
+	}
+	name := opts["name"]
+	if !validName(name) {
+		return errors.New("a valid project name is required with -N")
+	}
+	projects, err := loadProjects()
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, project := range projects {
+		if project.Name == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("project %q not found", name)
+	}
+	token, err := keyring.Get(service, name)
+	if err != nil {
+		return fmt.Errorf("token for project %q not found in OS credential store", name)
+	}
+	defer clear([]byte(token))
+	cmd := exec.Command(args[separator+1], args[separator+2:]...)
+	cmd.Env = withBWSAccessToken(os.Environ(), token)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return &commandExitError{code: exitErr.ExitCode()}
+		}
+		return fmt.Errorf("run token child process: %w", err)
+	}
+	return nil
 }
 
 func installCommand(args []string) error {

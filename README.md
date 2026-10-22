@@ -1,9 +1,11 @@
 # Amon Hen
 
-Amon Hen is a small Go CLI for running a command with secrets from one
-Bitwarden Secrets Manager (BWS) project. You register a local project name, the
-BWS project UUID, and that project's machine-account token. The token is entered
-at a hidden prompt and stored in your operating system's credential store.
+Amon Hen's primary purpose is managing multiple Bitwarden Secrets Manager
+(BWS) keys on one machine. Here, a key means a BWS machine-account token. Each
+token is stored in the operating system credential store under its Amon Hen
+project name. Projects also record their BWS project UUID, so commands can use
+the matching credential. The secret values stored inside BWS remain managed by
+Bitwarden.
 
 ## Install
 
@@ -50,6 +52,10 @@ amonhen project add -N local-dev -U 12345678-1234-4123-8123-123456789abc -T
 Then enter the machine-account token at the hidden prompt. The UUID above is an
 example; use the UUID of your own BWS project.
 
+Repeat `project add` with a different project name and UUID to manage another
+machine-account token on the same machine. Each project has its own credential
+store entry.
+
 ## List and delete projects
 
 List configured projects with either command:
@@ -72,6 +78,21 @@ amonhen project delete -U 12345678-1234-4123-8123-123456789abc
 Deleting a project also removes its saved token from the operating system
 credential store.
 
+## Pass a project's token to another process
+
+To run a process with a project's stored machine-account token in its
+`BWS_ACCESS_TOKEN` environment variable, use:
+
+```text
+amonhen token -N local-dev -- bws project list
+```
+
+`-N` selects the Amon Hen project. Amon Hen retrieves that project's token from
+the operating system credential store and starts the command after `--`. Amon
+Hen does not print the token, but the child process can read it from its
+environment and could print or transmit it. Use this only with a process you
+trust.
+
 ## Run a command
 
 Run the desired command through Amon Hen, naming the registered project:
@@ -93,6 +114,7 @@ amonhen --help
 amonhen project add --help
 amonhen project list --help
 amonhen project delete --help
+amonhen token --help
 amonhen run --help
 amonhen version
 amonhen -V
@@ -118,10 +140,13 @@ metadata and credentials for you to remove separately.
 ## Security model and limits
 
 Amon Hen keeps machine-account tokens out of command history and project
-metadata, and stores them using the operating system credential store. It uses
-`bws run` scoped to the selected project, so Amon Hen itself does not read
-individual BWS secret values. Configure machine accounts with the narrowest
-permissions needed, preferably read-only access to only the relevant project.
+metadata, and stores them using the operating system credential store. The
+`amonhen run` command uses `bws run` scoped to the selected project, so Amon Hen
+itself does not read individual BWS secret values. The separate `amonhen token`
+command intentionally passes the selected machine-account token to its child
+process through the environment; that process can read it. Configure machine
+accounts with the narrowest permissions needed, preferably read-only access
+to only the relevant project.
 
 This CLI alone is not a security boundary against a malicious agent running as
 the same operating-system user. That agent may be able to invoke Amon Hen, read
