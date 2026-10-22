@@ -1,17 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 
 	"github.com/zalando/go-keyring"
@@ -20,27 +17,26 @@ import (
 
 const (
 	appName = "amonhen"
-	service = "amonhen/bws-access-token"
+	service = "amonhen/bws-machine-account"
 )
 
 var version = "dev"
 
 type Project struct {
-	Name    string            `json:"name"`
-	Secrets map[string]string `json:"secrets"`
-}
-
-type Secret struct {
-	Value string `json:"value"`
+	Name string `json:"name"`
+	UUID string `json:"uuid"`
 }
 
 func main() {
+	if len(os.Args) == 1 && installOnExplorerDoubleClick() {
+		return
+	}
 	if err := run(os.Args[1:]); err != nil {
 		var exitErr *commandExitError
 		if errors.As(err, &exitErr) {
 			os.Exit(exitErr.code)
 		}
-		fmt.Fprintln(os.Stderr, "amonhen:", scrub(err.Error()))
+		fmt.Fprintln(os.Stderr, "amonhen:", err)
 		os.Exit(1)
 	}
 }
@@ -54,10 +50,12 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
-	case "token":
-		return tokenCommand(args[1:])
 	case "project":
 		return projectCommand(args[1:])
+	case "ls", "list":
+		return listProjects(args[1:])
+	case "delete":
+		return deleteProject(args[1:])
 	case "install":
 		return installCommand(args[1:])
 	case "run":
@@ -69,97 +67,25 @@ func run(args []string) error {
 	}
 }
 
-func usage() error {
-	fmt.Print(helpText(""))
-	return nil
-}
-
+func usage() error           { fmt.Print(helpText("")); return nil }
 func isHelp(arg string) bool { return arg == "--help" || arg == "-h" }
 
 func helpText(topic string) string {
 	switch topic {
-	case "token":
-		return `Usage: amonhen token set
-
-Save a BWS machine-account access token in the operating system credential store.
-The token is entered without terminal echo and is not accepted as an argument.
-
-Options:
-  -h, --help  Show help for token commands
-`
-	case "token set":
-		return `Usage: amonhen token set
-
-Prompt for a BWS access token without echo and save it in the OS credential store.
-
-Options:
-  -h, --help  Show this help
-`
 	case "project":
-		return `Usage: amonhen project <command>
-
-Commands:
-  add <name> KEY=bws://<secret-uuid> [...]  Add a named project
-  list                                     List configured projects
-
-Options:
-  -h, --help  Show help for project commands
-`
+		return "Usage: amonhen project <add|list|delete>\n\nOptions:\n  -h, --help  Show this help\n"
 	case "project add":
-		return `Usage: amonhen project add <name> KEY=bws://<secret-uuid> [...]
-
-Add a uniquely named project and map environment variable names to BWS secret IDs.
-Project definitions store references only; they never contain resolved values.
-
-Options:
-  -h, --help  Show this help
-`
+		return "Usage: amonhen project add -N <name> -U <BWS-project-UUID> -T\n\nAdd a project. -T prompts for its machine-account token without echo; raw tokens are not accepted as arguments.\n\nOptions:\n  -N, --name   Unique local project name\n  -U, --uuid   Bitwarden Secrets Manager project UUID\n  -T, --token  Prompt securely for the project machine-account token\n  -h, --help   Show this help\n"
 	case "project list":
-		return `Usage: amonhen project list
-
-List project names and the number of BWS secret references configured for each.
-
-Options:
-  -h, --help  Show this help
-`
+		return "Usage: amonhen project list (alias: amonhen ls)\n\nShow configured project names and BWS project UUIDs. Tokens are never listed.\n\nOptions:\n  -h, --help  Show this help\n"
+	case "project delete":
+		return "Usage: amonhen project delete (-N <name> | -U <BWS-project-UUID>)\n\nDelete one project and its stored machine-account token.\n\nOptions:\n  -N, --name  Select by local project name\n  -U, --uuid  Select by BWS project UUID\n  -h, --help  Show this help\n"
 	case "run":
-		return `Usage: amonhen run <project> -- <command> [args...]
-
-Resolve a project's BWS secret references and start the requested command with
-the values in its environment. Child stdout and stderr are masked for literal
-secret values.
-
-Options:
-  -h, --help  Show this help
-`
+		return "Usage: amonhen run <project-name> -- <command> [args...]\n\nRun bws run scoped to the project's UUID. BWS injects its secrets into the command environment.\n\nOptions:\n  -h, --help  Show this help\n"
 	case "install":
-		return `Usage: amonhen install
-
-Install this Amon Hen executable for the current user and add its directory to
-the user's PATH. No administrator access is required.
-
-Options:
-  -h, --help  Show this help
-`
+		return "Usage: amonhen install\n\nInstall this executable for the current user and add its directory to PATH.\n\nOptions:\n  -h, --help  Show this help\n"
 	default:
-		return `Amon Hen — pass Bitwarden Secrets Manager values by reference
-
-Usage: amonhen [command]
-  amonhen token set
-  amonhen project add <name> KEY=bws://<secret-uuid> [...]
-  amonhen project list
-  amonhen install
-  amonhen run <project> -- <command> [args...]
-  amonhen version
-  amonhen -V, --version
-
-The BWS access token is requested without echo and stored in the OS credential
-store. Project definitions contain secret references, never secret values.
-
-Options:
-  -h, --help  Show help for a command
-  -v, -V, --version  Show version
-`
+		return "Amon Hen — scoped Bitwarden Secrets Manager launcher\n\nUsage:\n  amonhen project add -N <name> -U <BWS-project-UUID> -T\n  amonhen project list\n  amonhen ls\n  amonhen project delete -N <name>\n  amonhen project delete -U <BWS-project-UUID>\n  amonhen run <project-name> -- <command> [args...]\n  amonhen install\n  amonhen version | -V | --version\n\nProject tokens are stored in the OS credential store and never displayed.\nOptions: -h, --help show help for a command.\n"
 	}
 }
 
@@ -174,89 +100,189 @@ func installCommand(args []string) error {
 	return installSelf()
 }
 
-func tokenCommand(args []string) error {
-	if len(args) > 0 && isHelp(args[0]) || len(args) > 1 && args[0] == "set" && isHelp(args[1]) {
-		topic := "token"
-		if len(args) > 0 && args[0] == "set" || len(args) > 1 && args[1] == "set" {
-			topic = "token set"
-		}
-		fmt.Print(helpText(topic))
+func projectCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: amonhen project <add|list|delete> (use --help for details)")
+	}
+	if args[0] == "--help" || args[0] == "-h" {
+		fmt.Print(helpText("project"))
 		return nil
 	}
-	if len(args) != 1 || args[0] != "set" {
-		return errors.New("usage: amonhen token set (use --help for details)")
+	switch args[0] {
+	case "add":
+		if containsHelp(args[1:]) {
+			fmt.Print(helpText("project add"))
+			return nil
+		}
+		return addProject(args[1:])
+	case "list":
+		return listProjects(args[1:])
+	case "delete":
+		if containsHelp(args[1:]) {
+			fmt.Print(helpText("project delete"))
+			return nil
+		}
+		return deleteProject(args[1:])
+	default:
+		return errors.New("usage: amonhen project <add|list|delete> (use --help for details)")
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return errors.New("token set requires an interactive terminal; token input is not accepted as an argument or piped value")
-	}
-	fmt.Fprint(os.Stderr, "BWS access token: ")
-	token, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Fprintln(os.Stderr)
-	if err != nil {
-		return fmt.Errorf("read token: %w", err)
-	}
-	defer clear(token)
-	if len(token) == 0 {
-		return errors.New("token cannot be empty")
-	}
-	if err := keyring.Set(service, "default", string(token)); err != nil {
-		return fmt.Errorf("store token in OS credential store: %w", err)
-	}
-	fmt.Println("BWS token saved in the OS credential store")
-	return nil
 }
 
-func projectCommand(args []string) error {
-	for _, arg := range args {
-		if !isHelp(arg) {
+func containsHelp(args []string) bool {
+	for _, a := range args {
+		if isHelp(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseOptions(args []string, allowed map[string]bool) (map[string]string, error) {
+	values := make(map[string]string)
+	for i := 0; i < len(args); i++ {
+		key := args[i]
+		switch key {
+		case "-N", "--name":
+			key = "name"
+		case "-U", "--uuid":
+			key = "uuid"
+		case "-T", "--token":
+			key = "token"
+		}
+		if !allowed[key] {
+			return nil, fmt.Errorf("unexpected argument %q; tokens are entered only at the hidden prompt", args[i])
+		}
+		if _, exists := values[key]; exists {
+			return nil, fmt.Errorf("option %q was provided more than once", args[i])
+		}
+		if key == "token" {
+			values[key] = "true"
 			continue
 		}
-		topic := "project"
-		if args[0] == "add" || args[0] == "list" {
-			topic += " " + args[0]
+		i++
+		if i >= len(args) || strings.HasPrefix(args[i], "-") {
+			return nil, fmt.Errorf("option %q requires a value", args[i-1])
 		}
-		fmt.Print(helpText(topic))
-		return nil
+		values[key] = args[i]
 	}
-	if len(args) == 1 && args[0] == "list" {
-		projects, err := loadProjects()
-		if err != nil {
-			return err
-		}
-		for _, p := range projects {
-			fmt.Printf("%s\t%d secret reference(s)\n", p.Name, len(p.Secrets))
-		}
-		return nil
+	return values, nil
+}
+
+var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func validUUID(s string) bool { return uuidPattern.MatchString(s) }
+
+func addProject(args []string) error {
+	opts, err := parseOptions(args, map[string]bool{"name": true, "uuid": true, "token": true})
+	if err != nil {
+		return err
 	}
-	if len(args) < 3 || args[0] != "add" {
-		return errors.New("usage: amonhen project add <name> KEY=bws://<secret-uuid> [...] (use --help for details)")
-	}
-	name := args[1]
+	name, uuid := opts["name"], strings.ToLower(opts["uuid"])
 	if !validName(name) {
-		return errors.New("project name must contain only letters, numbers, dots, underscores, and hyphens")
+		return errors.New("project name is required and may contain only letters, numbers, dots, underscores, and hyphens")
 	}
-	project := Project{Name: name, Secrets: make(map[string]string)}
-	for _, pair := range args[2:] {
-		key, ref, ok := strings.Cut(pair, "=")
-		if !ok || !validEnvName(key) || !strings.HasPrefix(ref, "bws://") || len(strings.TrimPrefix(ref, "bws://")) == 0 {
-			return fmt.Errorf("invalid mapping %q; expected KEY=bws://<secret-uuid>", pair)
-		}
-		if strings.EqualFold(key, "BWS_ACCESS_TOKEN") {
-			return errors.New("BWS_ACCESS_TOKEN is reserved and cannot be a project environment variable")
-		}
-		project.Secrets[key] = ref
+	if !validUUID(uuid) {
+		return errors.New("a valid BWS project UUID is required with -U")
+	}
+	if opts["token"] != "true" {
+		return errors.New("-T is required to securely prompt for the project machine-account token")
 	}
 	projects, err := loadProjects()
 	if err != nil {
 		return err
 	}
-	for _, existing := range projects {
-		if existing.Name == name {
-			return fmt.Errorf("project %q already exists", name)
+	for _, p := range projects {
+		if strings.EqualFold(p.Name, name) {
+			return fmt.Errorf("project name %q already exists", name)
+		}
+		if strings.EqualFold(p.UUID, uuid) {
+			return fmt.Errorf("BWS project UUID %q is already configured", uuid)
 		}
 	}
-	projects = append(projects, project)
-	return saveProjects(projects)
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return errors.New("project add requires an interactive terminal for the hidden token prompt")
+	}
+	fmt.Fprint(os.Stderr, "BWS machine-account token: ")
+	token, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return fmt.Errorf("read machine-account token: %w", err)
+	}
+	defer clear(token)
+	if len(token) == 0 {
+		return errors.New("token cannot be empty")
+	}
+	if err = keyring.Set(service, name, string(token)); err != nil {
+		return fmt.Errorf("store project token in OS credential store: %w", err)
+	}
+	projects = append(projects, Project{Name: name, UUID: uuid})
+	if err = saveProjects(projects); err != nil {
+		rollback := keyring.Delete(service, name)
+		if rollback != nil {
+			return fmt.Errorf("save project config: %v (also failed to remove stored token: %w)", err, rollback)
+		}
+		return err
+	}
+	fmt.Printf("Added project %s (%s); machine token stored in OS credential store.\n", name, uuid)
+	return nil
+}
+
+func listProjects(args []string) error {
+	if containsHelp(args) {
+		fmt.Print(helpText("project list"))
+		return nil
+	}
+	if len(args) > 0 {
+		return errors.New("usage: amonhen project list")
+	}
+	projects, err := loadProjects()
+	if err != nil {
+		return err
+	}
+	fmt.Println("NAME\tBWS_PROJECT_UUID")
+	for _, p := range projects {
+		fmt.Printf("%s\t%s\n", p.Name, p.UUID)
+	}
+	return nil
+}
+
+func deleteProject(args []string) error {
+	if containsHelp(args) {
+		fmt.Print(helpText("project delete"))
+		return nil
+	}
+	opts, err := parseOptions(args, map[string]bool{"name": true, "uuid": true})
+	if err != nil {
+		return err
+	}
+	name, uuid := opts["name"], strings.ToLower(opts["uuid"])
+	if (name == "") == (uuid == "") {
+		return errors.New("select exactly one project using -N <name> or -U <uuid>")
+	}
+	projects, err := loadProjects()
+	if err != nil {
+		return err
+	}
+	index := -1
+	for i, p := range projects {
+		if name != "" && strings.EqualFold(p.Name, name) || uuid != "" && strings.EqualFold(p.UUID, uuid) {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return errors.New("project not found")
+	}
+	p := projects[index]
+	updated := append(projects[:index], projects[index+1:]...)
+	if err := saveProjects(updated); err != nil {
+		return err
+	}
+	if err := keyring.Delete(service, p.Name); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+		return fmt.Errorf("project removed, but could not remove its OS-stored token: %w", err)
+	}
+	fmt.Printf("Deleted project %s (%s) and its stored token.\n", p.Name, p.UUID)
+	return nil
 }
 
 func runCommand(args []string) error {
@@ -265,14 +291,14 @@ func runCommand(args []string) error {
 		return nil
 	}
 	separator := -1
-	for i, arg := range args {
-		if arg == "--" {
+	for i, a := range args {
+		if a == "--" {
 			separator = i
 			break
 		}
 	}
 	if separator < 1 || separator+1 >= len(args) {
-		return errors.New("usage: amonhen run <project> -- <command> [args...] (use --help for details)")
+		return errors.New("usage: amonhen run <project-name> -- <command> [args...] (use --help for details)")
 	}
 	name := args[0]
 	projects, err := loadProjects()
@@ -289,81 +315,46 @@ func runCommand(args []string) error {
 	if project == nil {
 		return fmt.Errorf("project %q not found", name)
 	}
-	token, err := keyring.Get(service, "default")
+	token, err := keyring.Get(service, project.Name)
 	if err != nil {
-		return errors.New("BWS token not found; run 'amonhen token set'")
+		return errors.New("project token not found in OS credential store; add the project again with -T")
 	}
-	defer func() {
-		b := []byte(token)
-		clear(b)
-	}()
-
-	values := make(map[string]string, len(project.Secrets))
-	for envName, ref := range project.Secrets {
-		id := strings.TrimPrefix(ref, "bws://")
-		value, err := getBWSSecret(token, id)
-		if err != nil {
-			return fmt.Errorf("resolve %s: %w", envName, err)
-		}
-		values[envName] = value
-	}
-
-	cmd := exec.Command(args[separator+1], args[separator+2:]...)
+	defer clear([]byte(token))
+	cmdArgs := bwsRunArgs(project.UUID, args[separator+1:])
+	cmd := exec.Command("bws", cmdArgs...)
+	cmd.Env = withBWSAccessToken(os.Environ(), token)
 	cmd.Stdin = os.Stdin
-	stdoutMask := newMaskWriter(os.Stdout, values)
-	stderrMask := newMaskWriter(os.Stderr, values)
-	cmd.Stdout = stdoutMask
-	cmd.Stderr = stderrMask
-	childEnv := make(map[string]string, len(values))
-	for k, v := range values {
-		childEnv[k] = v
-	}
-	cmd.Env = mergeEnv(os.Environ(), childEnv)
-	runErr := cmd.Run()
-	maskErr := errors.Join(stdoutMask.close(), stderrMask.close())
-	if maskErr != nil {
-		return maskErr
-	}
-	if runErr != nil {
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
+		if errors.As(err, &exitErr) {
 			return &commandExitError{code: exitErr.ExitCode()}
 		}
-		return scrubError(runErr, values)
+		return fmt.Errorf("run BWS command: %w", err)
 	}
 	return nil
 }
 
-func getBWSSecret(token, id string) (string, error) {
-	cmd := exec.Command("bws", "secret", "get", id)
-	cmd.Env = mergeEnv(os.Environ(), map[string]string{"BWS_ACCESS_TOKEN": token})
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return "", errors.New("BWS secret retrieval failed (details suppressed to avoid credential leakage)")
-	}
-	var secret Secret
-	if err := json.Unmarshal(stdout.Bytes(), &secret); err != nil {
-		return "", errors.New("BWS returned an unexpected response")
-	}
-	if secret.Value == "" {
-		return "", errors.New("BWS returned an empty secret")
-	}
-	return secret.Value, nil
+func bwsRunArgs(uuid string, command []string) []string {
+	args := []string{"run", "--no-inherit-env", "--project-id", uuid, "--"}
+	return append(args, command...)
 }
-
-func mergeEnv(base []string, additions map[string]string) []string {
-	result := make([]string, 0, len(base)+len(additions))
-	for _, entry := range base {
+func withBWSAccessToken(env []string, token string) []string {
+	result := make([]string, 0, len(env)+1)
+	for _, entry := range env {
 		key, _, _ := strings.Cut(entry, "=")
-		if _, replaced := additions[key]; !replaced && !strings.EqualFold(key, "BWS_ACCESS_TOKEN") {
+		if !strings.EqualFold(key, "BWS_ACCESS_TOKEN") {
 			result = append(result, entry)
 		}
 	}
-	for key, value := range additions {
-		result = append(result, key+"="+value)
-	}
-	return result
+	return append(result, "BWS_ACCESS_TOKEN="+token)
+}
+
+type commandExitError struct{ code int }
+
+func (e *commandExitError) Error() string {
+	return fmt.Sprintf("command exited with status %d", e.code)
 }
 
 func loadProjects() ([]Project, error) {
@@ -384,28 +375,26 @@ func loadProjects() ([]Project, error) {
 	}
 	return projects, nil
 }
-
 func saveProjects(projects []Project) error {
 	path, err := configPath()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
 	data, err := json.MarshalIndent(projects, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err = os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("save project config: %w", err)
 	}
-	if err := os.Chmod(path, 0600); err != nil && runtime.GOOS != "windows" {
+	if err = os.Chmod(path, 0600); err != nil && runtime.GOOS != "windows" {
 		return fmt.Errorf("restrict project config permissions: %w", err)
 	}
 	return nil
 }
-
 func configPath() (string, error) {
 	root, err := os.UserConfigDir()
 	if err != nil {
@@ -413,102 +402,4 @@ func configPath() (string, error) {
 	}
 	return filepath.Join(root, appName, "projects.json"), nil
 }
-
 func validName(s string) bool { return regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(s) }
-func validEnvName(s string) bool {
-	return regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(s)
-}
-
-type maskWriter struct {
-	dst    io.Writer
-	values []string
-	buf    []byte
-	keep   int
-}
-
-func newMaskWriter(dst io.Writer, values map[string]string) *maskWriter {
-	list := make([]string, 0, len(values))
-	for _, value := range values {
-		if value != "" {
-			list = append(list, value)
-		}
-	}
-	sort.Slice(list, func(i, j int) bool { return len(list[i]) > len(list[j]) })
-	keep := 0
-	for _, value := range list {
-		if len(value)-1 > keep {
-			keep = len(value) - 1
-		}
-	}
-	return &maskWriter{dst: dst, values: list, keep: keep}
-}
-
-func (w *maskWriter) Write(p []byte) (int, error) {
-	w.buf = append(w.buf, p...)
-	if len(w.buf) > w.keep {
-		cut := len(w.buf) - w.keep
-		// Keep a suffix that could be the start of a secret split across writes.
-		prefix := string(w.buf[:cut])
-		for n := min(w.keep, len(prefix)); n > 0; n-- {
-			suffix := prefix[len(prefix)-n:]
-			candidate := false
-			for _, value := range w.values {
-				if strings.HasPrefix(value, suffix) {
-					candidate = true
-					break
-				}
-			}
-			if candidate {
-				cut -= n
-				break
-			}
-		}
-		if _, err := w.flush(w.buf[:cut]); err != nil {
-			return 0, err
-		}
-		w.buf = append([]byte(nil), w.buf[cut:]...)
-	}
-	return len(p), nil
-}
-
-func (w *maskWriter) flush(data []byte) (int, error) {
-	text := string(data)
-	for _, value := range w.values {
-		text = strings.ReplaceAll(text, value, "***")
-	}
-	return io.WriteString(w.dst, text)
-}
-
-func (w *maskWriter) close() error {
-	_, err := w.flush(w.buf)
-	w.buf = nil
-	return err
-}
-
-type commandExitError struct{ code int }
-
-func (e *commandExitError) Error() string {
-	return fmt.Sprintf("command exited with status %d", e.code)
-}
-
-func scrub(s string) string {
-	if token, err := keyring.Get(service, "default"); err == nil && token != "" {
-		s = strings.ReplaceAll(s, token, "***")
-	}
-	return s
-}
-
-func scrubError(err error, values map[string]string) error {
-	s := err.Error()
-	ordered := make([]string, 0, len(values))
-	for _, value := range values {
-		if value != "" {
-			ordered = append(ordered, value)
-		}
-	}
-	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
-	for _, value := range ordered {
-		s = strings.ReplaceAll(s, value, "***")
-	}
-	return errors.New(scrub(s))
-}

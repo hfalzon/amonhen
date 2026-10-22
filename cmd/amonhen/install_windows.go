@@ -7,9 +7,52 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
+
+// installOnExplorerDoubleClick distinguishes an Explorer launch from a CLI
+// invocation so double-clicking the release executable gives visible feedback.
+func installOnExplorerDoubleClick() bool {
+	parent, err := parentProcessName()
+	if err != nil || !strings.EqualFold(parent, "explorer.exe") {
+		return false
+	}
+	err = installSelf()
+	message := "Amon Hen installed. Open a new terminal and run amonhen --help."
+	icon := uintptr(0x40) // MB_ICONINFORMATION
+	if err != nil {
+		message = "Amon Hen installation failed:\n\n" + err.Error()
+		icon = 0x10
+	}
+	title, _ := windows.UTF16PtrFromString("Amon Hen installer")
+	body, _ := windows.UTF16PtrFromString(message)
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	_, _, _ = user32.NewProc("MessageBoxW").Call(0, uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(title)), icon|0x0)
+	return true
+}
+
+func parentProcessName() (string, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(snapshot)
+	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	if err := windows.Process32First(snapshot, &entry); err != nil {
+		return "", err
+	}
+	for {
+		if entry.ProcessID == uint32(os.Getppid()) {
+			return windows.UTF16ToString(entry.ExeFile[:]), nil
+		}
+		if err := windows.Process32Next(snapshot, &entry); err != nil {
+			return "", err
+		}
+	}
+}
 
 func installSelf() error {
 	source, err := os.Executable()

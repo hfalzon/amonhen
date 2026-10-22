@@ -1,108 +1,133 @@
 # Amon Hen
 
-A Go CLI that gives project commands Bitwarden Secrets Manager values by
-reference. Project files contain `bws://` IDs; the BWS access token is requested
-with terminal echo disabled and stored using the operating system credential
-store.
+Amon Hen is a small Go CLI for running a command with secrets from one
+Bitwarden Secrets Manager (BWS) project. You register a local project name, the
+BWS project UUID, and that project's machine-account token. The token is entered
+at a hidden prompt and stored in your operating system's credential store.
 
-## Current commands
+## Install
+
+Install the official Bitwarden Secrets Manager CLI (`bws`) first. Download the
+Amon Hen executable for your operating system from the GitHub Releases page.
+
+On Windows, double-click `amonhen.exe` to install it for your user. A message
+confirms success or shows an error. You can also run `amonhen.exe install` from
+PowerShell.
+
+On macOS or Linux, run `./amonhen install` from a terminal. The installer places
+the executable in `~/.local/bin` and adds that directory to the detected shell
+startup file if needed. Open a new terminal or reload that file afterward.
+
+To build from source, install Go 1.23 or later and run:
+
+```sh
+go build -o amonhen ./cmd/amonhen
+```
+
+## Add a project
+
+Create a BWS machine account with access to the BWS project you want to use.
+Prefer a read-only machine account scoped only to the required project. Then
+register it with Amon Hen:
 
 ```text
-amonhen token set
-amonhen project add demo OPENAI_API_KEY=bws://<secret-uuid>
+amonhen project add -N local-dev -U <BWS-project-UUID> -T
+```
+
+`-N` is the unique name you choose for the project in Amon Hen. `-U` is the
+UUID of the project in Bitwarden Secrets Manager. `-T` tells Amon Hen to prompt
+for that project's machine-account token without displaying the characters as
+you type. The token itself is not a command-line argument; do not paste it into
+the command. Amon Hen stores it in the operating system credential store.
+
+For example, if the BWS project UUID is
+`12345678-1234-4123-8123-123456789abc`, enter:
+
+```text
+amonhen project add -N local-dev -U 12345678-1234-4123-8123-123456789abc -T
+```
+
+Then enter the machine-account token at the hidden prompt. The UUID above is an
+example; use the UUID of your own BWS project.
+
+## List and delete projects
+
+List configured projects with either command:
+
+```text
 amonhen project list
-amonhen install
-amonhen run demo -- npm run dev
-amonhen version
+amonhen ls
 ```
 
-`amonhen version`, `amonhen -V`, and `amonhen --version` print the embedded
-release version.
+The output contains each project's local name and BWS project UUID. It never
+shows the machine-account token.
 
-Install the official Bitwarden Secrets Manager CLI (`bws`) and create a
-read-only machine account scoped to a dedicated development project. Then save
-its access token with `amonhen token set`. Get a secret's UUID from Bitwarden
-Secrets Manager and add it to a named Amon Hen project. Amon Hen resolves each
-reference immediately before starting the command. It does not offer a command
-that prints a resolved value, and it masks literal secret values in child
-stdout and stderr.
-
-Project metadata is stored in the user's config directory with restrictive
-file permissions. Secret values are not written to the config file. The BWS
-CLI receives its access token through `BWS_ACCESS_TOKEN`, never as an argument.
-The launched command does not inherit that token.
-
-## Security model and limits
-
-This version helps prevent accidental exposure through chat, command arguments,
-project files, and ordinary command output. Using a dedicated BWS machine
-account with read-only access to a non-production project also limits the
-damage if that account is compromised.
-
-**This version is not a security boundary against an agent running as the same
-OS user.** Such an agent can potentially retrieve the token from that user's
-credential store, inspect Amon Hen or BWS processes, change the command it asks
-Amon Hen to run, or make the launched command transmit the secret. Output
-masking only catches literal values in stdout/stderr; it cannot stop encoding,
-network exfiltration, or other side channels. Credential stores protect data at
-rest and from other OS identities; they do not protect one process from another
-process with the same user's permissions.
-
-To claim resistance to a malicious same-user agent, Amon Hen needs a separate
-broker identity and a locked-down workload boundary. The broker must own the
-credential store and accept only narrow, authenticated requests. The secret-
-using workload must be fixed or approved, run under a separate restricted
-identity/container/VM, and have tightly limited filesystem, debugging, and
-network access. The agent must not be able to control or inspect that workload.
-Even then, any workload allowed to use a credential can misuse its authority;
-permissions and network destinations must limit that capability. This CLI is a
-first reference-based workflow, not that broker/sandbox implementation.
-
-## Development
-
-Requires Go 1.23 or later. Build with:
+Delete by the local name or the BWS project UUID:
 
 ```text
-go build ./cmd/amonhen
+amonhen project delete -N local-dev
+amonhen project delete -U 12345678-1234-4123-8123-123456789abc
 ```
 
-## Install on Windows
+Deleting a project also removes its saved token from the operating system
+credential store.
 
-From PowerShell in the repository directory, run:
+## Run a command
 
-```powershell
-go run ./cmd/amonhen install
+Run the desired command through Amon Hen, naming the registered project:
+
+```text
+amonhen run local-dev -- npm run dev
 ```
 
-From an extracted Windows release package, run `.\amonhen.exe install`.
-The executable installs itself under `%LOCALAPPDATA%\Programs\AmonHen\bin` and
-adds that directory to the current user's PATH. It does not require
-administrator access. Open a new terminal to use `amonhen`.
+Amon Hen starts the BWS CLI with that project's UUID and machine-account token.
+BWS supplies the secrets belonging to the project to the requested command as
+environment variables. The BWS machine-account token is passed to the BWS
+process through `BWS_ACCESS_TOKEN`; it is not included in the command arguments.
+Amon Hen does not fetch or store individual secret values.
 
-To remove the executable and its PATH entry while keeping the user's settings
-and credentials, run:
+## Help and version
+
+```text
+amonhen --help
+amonhen project add --help
+amonhen project list --help
+amonhen project delete --help
+amonhen run --help
+amonhen version
+amonhen -V
+```
+
+## Uninstall
+
+On Windows, run the included script:
 
 ```powershell
 .\uninstall.ps1
 ```
 
-## Install on Linux or macOS
-
-From a terminal in the repository directory, run:
-
-```sh
-go run ./cmd/amonhen install
-```
-
-From an extracted Linux/macOS release package, run `./amonhen install`. The
-executable installs itself under `~/.local/bin` and adds that directory to the
-detected shell's startup file when needed. Open a new terminal or reload the
-startup file to use `amonhen`.
-
-To remove the executable and the installer's PATH entry while keeping the
-user's project configuration and credentials, run:
+On macOS or Linux, run:
 
 ```sh
 sh ./uninstall.sh
 ```
 
+The uninstallers remove Amon Hen and its PATH entry while leaving project
+metadata and credentials for you to remove separately.
+
+## Security model and limits
+
+Amon Hen keeps machine-account tokens out of command history and project
+metadata, and stores them using the operating system credential store. It uses
+`bws run` scoped to the selected project, so Amon Hen itself does not read
+individual BWS secret values. Configure machine accounts with the narrowest
+permissions needed, preferably read-only access to only the relevant project.
+
+This CLI alone is not a security boundary against a malicious agent running as
+the same operating-system user. That agent may be able to invoke Amon Hen, read
+the environment of a command it controls, or make that command disclose secrets
+it receives. The operating system credential store protects tokens at rest and
+between user identities; it does not isolate mutually untrusted processes
+running as the same user. Stronger protection requires a separate broker
+identity and an isolated, restricted workload that the agent cannot inspect
+or control.

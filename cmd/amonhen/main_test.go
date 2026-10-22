@@ -1,71 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"io"
 	"os"
 	"strings"
 	"testing"
 )
-
-func TestMaskWriterMasksSecretsAcrossWrites(t *testing.T) {
-	var out bytes.Buffer
-	writer := newMaskWriter(&out, map[string]string{
-		"API_KEY": "super-secret-value",
-		"SHORT":   "xy",
-	})
-
-	chunks := []string{"prefix super-", "secret-", "value suffix x", "y done"}
-	for _, chunk := range chunks {
-		if _, err := writer.Write([]byte(chunk)); err != nil {
-			t.Fatalf("Write() error = %v", err)
-		}
-	}
-	if err := writer.close(); err != nil {
-		t.Fatalf("close() error = %v", err)
-	}
-
-	got := out.String()
-	if strings.Contains(got, "super-secret-value") || strings.Contains(got, "xy") {
-		t.Fatalf("secret leaked in masked output: %q", got)
-	}
-	if !strings.Contains(got, "***") {
-		t.Fatalf("masked output has no redaction marker: %q", got)
-	}
-}
-
-func TestMaskWriterMasksOverlappingSecretsLongestFirst(t *testing.T) {
-	var out bytes.Buffer
-	writer := newMaskWriter(&out, map[string]string{
-		"SHORT": "secret",
-		"LONG":  "secret-value",
-	})
-	if _, err := writer.Write([]byte("secret-value")); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.close(); err != nil {
-		t.Fatal(err)
-	}
-	if got := out.String(); got != "***" {
-		t.Fatalf("masked output = %q, want %q", got, "***")
-	}
-}
-
-func TestMergeEnvRemovesExistingBWSAccessToken(t *testing.T) {
-	got := mergeEnv([]string{
-		"PATH=/usr/bin",
-		"bws_access_token=ambient-token",
-		"APP_MODE=dev",
-	}, map[string]string{"API_KEY": "resolved-value"})
-
-	joined := strings.Join(got, "\n")
-	if strings.Contains(strings.ToLower(joined), "bws_access_token") || strings.Contains(joined, "ambient-token") {
-		t.Fatalf("BWS token was inherited by the child: %q", joined)
-	}
-	if !strings.Contains(joined, "PATH=/usr/bin") || !strings.Contains(joined, "APP_MODE=dev") || !strings.Contains(joined, "API_KEY=resolved-value") {
-		t.Fatalf("expected environment entries missing: %q", joined)
-	}
-}
 
 func TestProjectAndEnvironmentNames(t *testing.T) {
 	for _, name := range []string{"api-service", "demo_1", "Project.Name"} {
@@ -75,41 +15,61 @@ func TestProjectAndEnvironmentNames(t *testing.T) {
 	}
 	for _, name := range []string{"", "has space", "../escape", "a/b"} {
 		if validName(name) {
-			t.Errorf("validName(%q) = true, want false", name)
-		}
-	}
-	for _, name := range []string{"API_KEY", "_TOKEN", "a1"} {
-		if !validEnvName(name) {
-			t.Errorf("validEnvName(%q) = false", name)
-		}
-	}
-	for _, name := range []string{"", "1BAD", "HAS-DASH", "HAS SPACE"} {
-		if validEnvName(name) {
-			t.Errorf("validEnvName(%q) = true, want false", name)
+			t.Errorf("validName(%q) = true", name)
 		}
 	}
 }
 
-func TestHelpIsAvailableAtEveryCommandPath(t *testing.T) {
-	cases := [][]string{
-		{"--help"},
-		{"token", "--help"},
-		{"token", "set", "--help"},
-		{"project", "--help"},
-		{"project", "add", "--help"},
-		{"project", "add", "demo", "API_KEY=bws://id", "--help"},
-		{"project", "list", "--help"},
-		{"install", "--help"},
-		{"run", "--help"},
+func TestValidUUID(t *testing.T) {
+	if !validUUID("12345678-1234-4123-8123-123456789abc") {
+		t.Fatal("valid BWS UUID rejected")
 	}
+	for _, input := range []string{"", "project-1", "12345678123441238123123456789abc", "zzzzzzzz-1234-4123-8123-123456789abc"} {
+		if validUUID(input) {
+			t.Errorf("validUUID(%q) = true", input)
+		}
+	}
+}
+
+func TestParseProjectOptions(t *testing.T) {
+	got, err := parseOptions([]string{"-N", "local-dev", "-U", "123", "-T"}, map[string]bool{"name": true, "uuid": true, "token": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["name"] != "local-dev" || got["uuid"] != "123" || got["token"] != "true" {
+		t.Fatalf("parsed options = %#v", got)
+	}
+	if _, err := parseOptions([]string{"-N", "demo", "machine-token"}, map[string]bool{"name": true}); err == nil || !strings.Contains(err.Error(), "hidden prompt") {
+		t.Fatalf("raw token argument error = %v", err)
+	}
+}
+
+func TestBWSRunUsesProjectAndDoesNotInheritEnvironment(t *testing.T) {
+	got := bwsRunArgs("project-uuid", []string{"npm", "run", "dev"})
+	want := []string{"run", "--no-inherit-env", "--project-id", "project-uuid", "--", "npm", "run", "dev"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("bws args = %#v, want %#v", got, want)
+	}
+}
+
+func TestBWSAccessTokenIsOnlyAddedToBWSProcessEnvironment(t *testing.T) {
+	got := withBWSAccessToken([]string{"PATH=/bin", "bws_access_token=ambient", "APP_MODE=dev"}, "project-token")
+	joined := strings.Join(got, "\n")
+	if strings.Count(strings.ToLower(joined), "bws_access_token=") != 1 || !strings.Contains(joined, "BWS_ACCESS_TOKEN=project-token") || strings.Contains(joined, "ambient") {
+		t.Fatalf("BWS env = %q", joined)
+	}
+}
+
+func TestHelpIsAvailableAtEveryCommandPath(t *testing.T) {
+	cases := [][]string{{"--help"}, {"project", "--help"}, {"project", "add", "--help"}, {"project", "add", "-N", "demo", "-h"}, {"project", "list", "--help"}, {"project", "delete", "--help"}, {"ls", "--help"}, {"install", "--help"}, {"run", "--help"}}
 	for _, args := range cases {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			output, err := captureRun(args)
 			if err != nil {
-				t.Fatalf("run(%v) error = %v", args, err)
+				t.Fatalf("run(%v): %v", args, err)
 			}
-			if !strings.Contains(output, "Usage: amonhen") {
-				t.Fatalf("run(%v) did not print command help: %q", args, output)
+			if !strings.Contains(output, "Usage:") {
+				t.Fatalf("help missing for %v: %q", args, output)
 			}
 		})
 	}
@@ -117,15 +77,13 @@ func TestHelpIsAvailableAtEveryCommandPath(t *testing.T) {
 
 func TestVersionCommandAndFlags(t *testing.T) {
 	for _, args := range [][]string{{"version"}, {"-V"}, {"--version"}} {
-		t.Run(strings.Join(args, "_"), func(t *testing.T) {
-			output, err := captureRun(args)
-			if err != nil {
-				t.Fatalf("run(%v) error = %v", args, err)
-			}
-			if output != "amonhen "+version+"\n" {
-				t.Fatalf("version output = %q", output)
-			}
-		})
+		output, err := captureRun(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if output != "amonhen "+version+"\n" {
+			t.Fatalf("version output = %q", output)
+		}
 	}
 }
 
@@ -145,4 +103,18 @@ func captureRun(args []string) (string, error) {
 		return string(output), runErr
 	}
 	return string(output), readErr
+}
+
+func TestListShowsNamesAndUUIDsButNoToken(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := saveProjects([]Project{{Name: "local-dev", UUID: "12345678-1234-4123-8123-123456789abc"}}); err != nil {
+		t.Fatal(err)
+	}
+	output, err := captureRun([]string{"ls"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output, "token") || !strings.Contains(output, "local-dev") || !strings.Contains(output, "12345678-1234-4123-8123-123456789abc") {
+		t.Fatalf("list output = %q", output)
+	}
 }

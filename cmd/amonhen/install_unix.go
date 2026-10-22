@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+func installOnExplorerDoubleClick() bool { return false }
+
 func installSelf() error {
 	source, err := os.Executable()
 	if err != nil {
