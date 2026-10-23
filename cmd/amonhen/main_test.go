@@ -1,10 +1,14 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 )
 
 func TestProjectAndEnvironmentNames(t *testing.T) {
@@ -61,7 +65,7 @@ func TestBWSAccessTokenIsOnlyAddedToBWSProcessEnvironment(t *testing.T) {
 }
 
 func TestHelpIsAvailableAtEveryCommandPath(t *testing.T) {
-	cases := [][]string{{"--help"}, {"project", "--help"}, {"project", "add", "--help"}, {"project", "add", "-N", "demo", "-h"}, {"project", "list", "--help"}, {"project", "uuid", "--help"}, {"project", "delete", "--help"}, {"token", "--help"}, {"token", "-h", "--", "command"}, {"ls", "--help"}, {"install", "--help"}, {"run", "--help"}}
+	cases := [][]string{{"--help"}, {"project", "--help"}, {"project", "add", "--help"}, {"project", "add", "-N", "demo", "-h"}, {"project", "list", "--help"}, {"project", "uuid", "--help"}, {"project", "token", "--help"}, {"project", "token", "set", "--help"}, {"project", "token", "set", "-N", "demo", "-h"}, {"project", "delete", "--help"}, {"token", "--help"}, {"token", "-h", "--", "command"}, {"ls", "--help"}, {"install", "--help"}, {"run", "--help"}}
 	for _, args := range cases {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			output, err := captureRun(args)
@@ -72,6 +76,32 @@ func TestHelpIsAvailableAtEveryCommandPath(t *testing.T) {
 				t.Fatalf("help missing for %v: %q", args, output)
 			}
 		})
+	}
+}
+
+func TestProjectTokenReadErrorDistinguishesMissingAndBackendFailures(t *testing.T) {
+	missing := projectTokenReadError("local-dev", keyring.ErrNotFound)
+	if !strings.Contains(missing.Error(), "not found") || !strings.Contains(missing.Error(), "project token set") {
+		t.Fatalf("missing credential error = %q", missing)
+	}
+
+	backendErr := errors.New("Windows Credential Manager access denied")
+	got := projectTokenReadError("local-dev", fmt.Errorf("credential lookup: %w", backendErr))
+	if !errors.Is(got, backendErr) {
+		t.Fatalf("backend cause not preserved: %v", got)
+	}
+	if strings.Contains(strings.ToLower(got.Error()), "not found") || !strings.Contains(got.Error(), backendErr.Error()) {
+		t.Fatalf("backend error was misreported: %q", got)
+	}
+}
+
+func TestProjectTokenSetRequiresHiddenPromptFlag(t *testing.T) {
+	err := setProjectToken([]string{"-N", "local-dev"})
+	if err == nil || !strings.Contains(err.Error(), "-T is required") {
+		t.Fatalf("setProjectToken error = %v", err)
+	}
+	if _, err := parseOptions([]string{"-N", "local-dev", "plain-text-token"}, map[string]bool{"name": true, "token": true}); err == nil {
+		t.Fatal("raw token argument was accepted")
 	}
 }
 
@@ -107,6 +137,7 @@ func captureRun(args []string) (string, error) {
 
 func TestListShowsNamesAndUUIDsButNoToken(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
 	if err := saveProjects([]Project{{Name: "local-dev", UUID: "12345678-1234-4123-8123-123456789abc"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +152,7 @@ func TestListShowsNamesAndUUIDsButNoToken(t *testing.T) {
 
 func TestProjectUUIDLookupByName(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
 	const uuid = "12345678-1234-4123-8123-123456789abc"
 	if err := saveProjects([]Project{{Name: "local-dev", UUID: uuid}}); err != nil {
 		t.Fatal(err)

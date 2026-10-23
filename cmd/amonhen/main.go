@@ -75,13 +75,17 @@ func isHelp(arg string) bool { return arg == "--help" || arg == "-h" }
 func helpText(topic string) string {
 	switch topic {
 	case "project":
-		return "Usage: amonhen project <add|list|uuid|delete>\n\nOptions:\n  -h, --help  Show this help\n"
+		return "Usage: amonhen project <add|list|uuid|token|delete>\n\nOptions:\n  -h, --help  Show this help\n"
 	case "project add":
 		return "Usage: amonhen project add -N <name> -U <BWS-project-UUID> -T\n\nAdd a project. -T prompts for its machine-account token without echo; raw tokens are not accepted as arguments.\n\nOptions:\n  -N, --name   Unique local project name\n  -U, --uuid   Bitwarden Secrets Manager project UUID\n  -T, --token  Prompt securely for the project machine-account token\n  -h, --help   Show this help\n"
 	case "project list":
 		return "Usage: amonhen project list (alias: amonhen ls)\n\nShow configured project names and BWS project UUIDs. Tokens are never listed.\n\nOptions:\n  -h, --help  Show this help\n"
 	case "project uuid":
 		return "Usage: amonhen project uuid -N <project-name>\n\nPrint the BWS project UUID for the named project.\n\nOptions:\n  -N, --name  Select the Amon Hen project\n  -h, --help  Show this help\n"
+	case "project token":
+		return "Usage: amonhen project token set -N <project-name> -T\n\nReplace or restore the stored BWS machine-account token for an existing project. The token is entered at a hidden prompt.\n\nOptions:\n  -h, --help  Show this help\n"
+	case "project token set":
+		return "Usage: amonhen project token set -N <project-name> -T\n\nSecurely replace the stored token for an existing project. This does not change its project name or BWS UUID. The token is entered at a hidden prompt, never as a command-line argument.\n\nOptions:\n  -N, --name   Select the existing project\n  -T, --token  Prompt securely for the replacement token\n  -h, --help   Show this help\n"
 	case "project delete":
 		return "Usage: amonhen project delete (-N <name> | -U <BWS-project-UUID>)\n\nDelete one project and its stored machine-account token.\n\nOptions:\n  -N, --name  Select by local project name\n  -U, --uuid  Select by BWS project UUID\n  -h, --help  Show this help\n"
 	case "run":
@@ -92,7 +96,7 @@ func helpText(topic string) string {
 		if topic == "token" {
 			return "Usage: amonhen token -N <project-name> -- <command> [args...]\n\nRun a child process with that project's stored BWS machine token in BWS_ACCESS_TOKEN. Amon Hen does not print the token. The child process can read it.\n\nOptions:\n  -N, --name  Select the project whose token to pass\n  -h, --help  Show this help\n"
 		}
-		return "Amon Hen — manage Bitwarden Secrets Manager machine-account keys\n\nUsage:\n  amonhen project add -N <name> -U <BWS-project-UUID> -T\n  amonhen project list\n  amonhen project uuid -N <name>\n  amonhen ls\n  amonhen project delete -N <name>\n  amonhen project delete -U <BWS-project-UUID>\n  amonhen token -N <project-name> -- <command> [args...]\n  amonhen run <project-name> -- <command> [args...]\n  amonhen install\n  amonhen version | -V | --version\n\nProject tokens are stored in the OS credential store and never displayed by Amon Hen.\nOptions: -h, --help show help for a command.\n"
+		return "Amon Hen — manage Bitwarden Secrets Manager machine-account keys\n\nUsage:\n  amonhen project add -N <name> -U <BWS-project-UUID> -T\n  amonhen project token set -N <name> -T\n  amonhen project list\n  amonhen project uuid -N <name>\n  amonhen ls\n  amonhen project delete -N <name>\n  amonhen project delete -U <BWS-project-UUID>\n  amonhen token -N <project-name> -- <command> [args...]\n  amonhen run <project-name> -- <command> [args...]\n  amonhen install\n  amonhen version | -V | --version\n\nProject tokens are stored in the OS credential store and never displayed by Amon Hen.\nOptions: -h, --help show help for a command.\n"
 	}
 }
 
@@ -139,7 +143,7 @@ func tokenCommand(args []string) error {
 	}
 	token, err := keyring.Get(service, name)
 	if err != nil {
-		return fmt.Errorf("token for project %q not found in OS credential store", name)
+		return projectTokenReadError(name, err)
 	}
 	defer clear([]byte(token))
 	cmd := exec.Command(args[separator+1], args[separator+2:]...)
@@ -168,7 +172,7 @@ func installCommand(args []string) error {
 
 func projectCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: amonhen project <add|list|uuid|delete> (use --help for details)")
+		return errors.New("usage: amonhen project <add|list|uuid|token|delete> (use --help for details)")
 	}
 	if args[0] == "--help" || args[0] == "-h" {
 		fmt.Print(helpText("project"))
@@ -189,6 +193,16 @@ func projectCommand(args []string) error {
 			return nil
 		}
 		return projectUUID(args[1:])
+	case "token":
+		if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
+			fmt.Print(helpText("project token"))
+			return nil
+		}
+		if len(args) > 1 && args[1] == "set" && containsHelp(args[2:]) {
+			fmt.Print(helpText("project token set"))
+			return nil
+		}
+		return projectTokenCommand(args[1:])
 	case "delete":
 		if containsHelp(args[1:]) {
 			fmt.Print(helpText("project delete"))
@@ -196,7 +210,7 @@ func projectCommand(args []string) error {
 		}
 		return deleteProject(args[1:])
 	default:
-		return errors.New("usage: amonhen project <add|list|uuid|delete> (use --help for details)")
+		return errors.New("usage: amonhen project <add|list|uuid|token|delete> (use --help for details)")
 	}
 }
 
@@ -220,6 +234,70 @@ func projectUUID(args []string) error {
 		}
 	}
 	return fmt.Errorf("project %q not found", name)
+}
+
+func projectTokenCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: amonhen project token set -N <project-name> -T (use --help for details)")
+	}
+	if args[0] != "set" {
+		return errors.New("usage: amonhen project token set -N <project-name> -T (use --help for details)")
+	}
+	return setProjectToken(args[1:])
+}
+
+func setProjectToken(args []string) error {
+	opts, err := parseOptions(args, map[string]bool{"name": true, "token": true})
+	if err != nil {
+		return err
+	}
+	name := opts["name"]
+	if !validName(name) {
+		return errors.New("a valid project name is required with -N")
+	}
+	if opts["token"] != "true" {
+		return errors.New("-T is required to securely prompt for the replacement token")
+	}
+	projects, err := loadProjects()
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, project := range projects {
+		if strings.EqualFold(project.Name, name) {
+			name = project.Name
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("project %q not found; add it with 'amonhen project add' first", name)
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return errors.New("project token set requires an interactive terminal for the hidden token prompt")
+	}
+	fmt.Fprint(os.Stderr, "Replacement BWS machine-account token: ")
+	token, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return fmt.Errorf("read replacement token: %w", err)
+	}
+	defer clear(token)
+	if len(token) == 0 {
+		return errors.New("token cannot be empty")
+	}
+	if err := keyring.Set(service, name, string(token)); err != nil {
+		return fmt.Errorf("replace token for project %q in OS credential store: %w", name, err)
+	}
+	fmt.Printf("Updated stored token for project %s.\n", name)
+	return nil
+}
+
+func projectTokenReadError(name string, err error) error {
+	if errors.Is(err, keyring.ErrNotFound) {
+		return fmt.Errorf("token for project %q was not found in the OS credential store; restore it with 'amonhen project token set -N %s -T'", name, name)
+	}
+	return fmt.Errorf("read token for project %q from the OS credential store: %w", name, err)
 }
 
 func containsHelp(args []string) bool {
@@ -411,10 +489,10 @@ func runCommand(args []string) error {
 	}
 	token, err := keyring.Get(service, project.Name)
 	if err != nil {
-		return errors.New("project token not found in OS credential store; add the project again with -T")
+		return projectTokenReadError(project.Name, err)
 	}
 	defer clear([]byte(token))
-	cmdArgs := bwsRunArgs(project.UUID, args[separator+1:])
+	cmdArgs := bwsRunArgs(project.UUID, bwsChildCommand(args[separator+1:]))
 	cmd := exec.Command("bws", cmdArgs...)
 	cmd.Env = withBWSAccessToken(os.Environ(), token)
 	cmd.Stdin = os.Stdin

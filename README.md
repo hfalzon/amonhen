@@ -58,6 +58,22 @@ Repeat `project add` with a different project name and UUID to manage another
 machine-account token on the same machine. Each project has its own credential
 store entry.
 
+## Replace or restore a project's token
+
+If a project's token needs rotation or its credential-store entry is missing,
+replace it without deleting the project or changing its UUID:
+
+```text
+amonhen project token set -N local-dev -T
+```
+
+Enter the replacement machine-account token at the hidden prompt. Amon Hen
+updates the credential-store entry for the existing project. The token is not
+accepted as a command-line argument. If a credential is missing, `amonhen run`
+points to this recovery command. Other credential-store failures include the
+underlying system error so access or configuration problems are distinguishable
+from a missing token.
+
 ## List and delete projects
 
 List configured projects with either command:
@@ -126,6 +142,7 @@ amonhen --help
 amonhen project add --help
 amonhen project list --help
 amonhen project uuid --help
+amonhen project token set --help
 amonhen project delete --help
 amonhen token --help
 amonhen run --help
@@ -169,3 +186,31 @@ between user identities; it does not isolate mutually untrusted processes
 running as the same user. Stronger protection requires a separate broker
 identity and an isolated, restricted workload that the agent cannot inspect
 or control.
+
+## Windows launcher and local checks
+
+On Windows, `run` restores an explicit allowlist of runtime variables inside
+BWS's clean child environment: executable lookup, temporary/user directories,
+and mise runtime paths. It does not forward arbitrary application variables or
+the BWS machine-account token. Command arguments are quoted as PowerShell
+literals and native command exit codes are propagated.
+
+Run the same checks used by CI before pushing:
+
+```sh
+go run ./scripts/check
+```
+
+This checks formatting, executes tests and vet, validates GitHub workflows with
+pinned actionlint, and cross-builds all five release targets. Build products use
+a temporary directory. The Windows tests launch a real PowerShell child with a
+stripped environment and synthetic inputs; no live credentials are required.
+CI runs the shared checks on Windows, Linux and macOS. Workflow linting and
+cross-builds are local checks; hosted runner behavior and release publishing
+are still verified by GitHub after a push.
+
+Enable the repository's automatic local gate once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
