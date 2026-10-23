@@ -64,8 +64,66 @@ func TestBWSAccessTokenIsOnlyAddedToBWSProcessEnvironment(t *testing.T) {
 	}
 }
 
+func TestValidateBwsTokenUsesReadOnlyProjectGet(t *testing.T) {
+	const token = "machine-token"
+	const uuid = "12345678-1234-4123-8123-123456789abc"
+	called := false
+	err := validateBwsTokenUsing(uuid, token, []string{"PATH=/test", "BWS_ACCESS_TOKEN=ambient"}, func(env []string, args ...string) ([]byte, error) {
+		called = true
+		if strings.Join(args, " ") != "project get "+uuid+" --output none" {
+			t.Fatalf("BWS args = %#v", args)
+		}
+		if strings.Contains(strings.Join(args, " "), token) {
+			t.Fatal("token was passed as a command-line argument")
+		}
+		if got := withBWSAccessToken(env, ""); strings.Contains(strings.Join(got, "\n"), "ambient") {
+			t.Fatal("ambient BWS token was retained")
+		}
+		if got := strings.Join(env, "\n"); strings.Count(got, "BWS_ACCESS_TOKEN=") != 1 || !strings.Contains(got, "BWS_ACCESS_TOKEN="+token) {
+			t.Fatalf("BWS environment = %q", got)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("validateBwsTokenUsing() error = %v", err)
+	}
+	if !called {
+		t.Fatal("BWS project check was not run")
+	}
+}
+
+func TestValidateBwsTokenFailureRedactsToken(t *testing.T) {
+	const token = "machine-token"
+	const uuid = "12345678-1234-4123-8123-123456789abc"
+	err := validateBwsTokenUsing(uuid, token, nil, func(env []string, args ...string) ([]byte, error) {
+		return []byte("rejected token " + token), errors.New("exit status 1")
+	})
+	if err == nil || !strings.Contains(err.Error(), uuid) {
+		t.Fatalf("validation error = %v", err)
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("validation error exposed token: %q", err)
+	}
+}
+
+func TestFailedValidationDoesNotStoreToken(t *testing.T) {
+	storeCalled := false
+	err := validateTokenBeforeStore("12345678-1234-4123-8123-123456789abc", "invalid", func(string, string) error {
+		return errors.New("BWS rejected token")
+	}, func() error {
+		storeCalled = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "token was not stored") {
+		t.Fatalf("validation error = %v", err)
+	}
+	if storeCalled {
+		t.Fatal("store callback ran after failed BWS validation")
+	}
+}
+
 func TestHelpIsAvailableAtEveryCommandPath(t *testing.T) {
-	cases := [][]string{{"--help"}, {"project", "--help"}, {"project", "add", "--help"}, {"project", "add", "-N", "demo", "-h"}, {"project", "list", "--help"}, {"project", "uuid", "--help"}, {"project", "token", "--help"}, {"project", "token", "set", "--help"}, {"project", "token", "set", "-N", "demo", "-h"}, {"project", "delete", "--help"}, {"token", "--help"}, {"token", "-h", "--", "command"}, {"ls", "--help"}, {"install", "--help"}, {"run", "--help"}}
+	cases := [][]string{{"--help"}, {"project", "--help"}, {"project", "add", "--help"}, {"project", "add", "-N", "demo", "-h"}, {"project", "list", "--help"}, {"project", "uuid", "--help"}, {"project", "token", "--help"}, {"project", "token", "set", "--help"}, {"project", "token", "set", "-N", "demo", "-h"}, {"project", "delete", "--help"}, {"token", "--help"}, {"token", "-h", "--", "command"}, {"test", "--help"}, {"test", "token", "--help"}, {"test", "token", "-N", "demo", "-h"}, {"ls", "--help"}, {"install", "--help"}, {"run", "--help"}}
 	for _, args := range cases {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			output, err := captureRun(args)

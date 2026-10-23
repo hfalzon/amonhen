@@ -62,6 +62,8 @@ func run(args []string) error {
 		return installCommand(args[1:])
 	case "run":
 		return runCommand(args[1:])
+	case "test":
+		return testCommand(args[1:])
 	case "help", "--help", "-h":
 		return usage()
 	default:
@@ -77,7 +79,7 @@ func helpText(topic string) string {
 	case "project":
 		return "Usage: amonhen project <add|list|uuid|token|delete>\n\nOptions:\n  -h, --help  Show this help\n"
 	case "project add":
-		return "Usage: amonhen project add -N <name> -U <BWS-project-UUID> -T\n\nAdd a project. -T prompts for its machine-account token without echo; raw tokens are not accepted as arguments.\n\nOptions:\n  -N, --name   Unique local project name\n  -U, --uuid   Bitwarden Secrets Manager project UUID\n  -T, --token  Prompt securely for the project machine-account token\n  -h, --help   Show this help\n"
+		return "Usage: amonhen project add -N <name> -U <BWS-project-UUID> -T\n\nAdd a project. -T prompts for its machine-account token without echo; BWS access is checked before the token is stored. Raw tokens are not accepted as arguments.\n\nOptions:\n  -N, --name   Unique local project name\n  -U, --uuid   Bitwarden Secrets Manager project UUID\n  -T, --token  Prompt securely for the project machine-account token\n  -h, --help   Show this help\n"
 	case "project list":
 		return "Usage: amonhen project list (alias: amonhen ls)\n\nShow configured project names and BWS project UUIDs. Tokens are never listed.\n\nOptions:\n  -h, --help  Show this help\n"
 	case "project uuid":
@@ -85,19 +87,112 @@ func helpText(topic string) string {
 	case "project token":
 		return "Usage: amonhen project token set -N <project-name> -T\n\nReplace or restore the stored BWS machine-account token for an existing project. The token is entered at a hidden prompt.\n\nOptions:\n  -h, --help  Show this help\n"
 	case "project token set":
-		return "Usage: amonhen project token set -N <project-name> -T\n\nSecurely replace the stored token for an existing project. This does not change its project name or BWS UUID. The token is entered at a hidden prompt, never as a command-line argument.\n\nOptions:\n  -N, --name   Select the existing project\n  -T, --token  Prompt securely for the replacement token\n  -h, --help   Show this help\n"
+		return "Usage: amonhen project token set -N <project-name> -T\n\nSecurely replace the stored token for an existing project. BWS access is checked before the existing credential is replaced. The token is entered at a hidden prompt, never as a command-line argument.\n\nOptions:\n  -N, --name   Select the existing project\n  -T, --token  Prompt securely for the replacement token\n  -h, --help   Show this help\n"
 	case "project delete":
 		return "Usage: amonhen project delete (-N <name> | -U <BWS-project-UUID>)\n\nDelete one project and its stored machine-account token.\n\nOptions:\n  -N, --name  Select by local project name\n  -U, --uuid  Select by BWS project UUID\n  -h, --help  Show this help\n"
 	case "run":
 		return "Usage: amonhen run <project-name> -- <command> [args...]\n\nRun bws run scoped to the project's UUID. BWS injects its secrets into the command environment.\n\nOptions:\n  -h, --help  Show this help\n"
+	case "test":
+		return "Usage: amonhen test token -N <project-name>\n\nCheck whether the stored token can access its configured BWS project. Makes a read-only BWS request and never prints the token.\n\nOptions:\n  -h, --help  Show this help\n"
+	case "test token":
+		return "Usage: amonhen test token -N <project-name>\n\nCheck whether the stored token can access its configured BWS project. Makes a read-only BWS request and never prints the token.\n\nOptions:\n  -N, --name  Select the configured project\n  -h, --help  Show this help\n"
 	case "install":
 		return "Usage: amonhen install\n\nInstall this executable for the current user and add its directory to PATH.\n\nOptions:\n  -h, --help  Show this help\n"
 	default:
 		if topic == "token" {
 			return "Usage: amonhen token -N <project-name> -- <command> [args...]\n\nRun a child process with that project's stored BWS machine token in BWS_ACCESS_TOKEN. Amon Hen does not print the token. The child process can read it.\n\nOptions:\n  -N, --name  Select the project whose token to pass\n  -h, --help  Show this help\n"
 		}
-		return "Amon Hen — manage Bitwarden Secrets Manager machine-account keys\n\nUsage:\n  amonhen project add -N <name> -U <BWS-project-UUID> -T\n  amonhen project token set -N <name> -T\n  amonhen project list\n  amonhen project uuid -N <name>\n  amonhen ls\n  amonhen project delete -N <name>\n  amonhen project delete -U <BWS-project-UUID>\n  amonhen token -N <project-name> -- <command> [args...]\n  amonhen run <project-name> -- <command> [args...]\n  amonhen install\n  amonhen version | -V | --version\n\nProject tokens are stored in the OS credential store and never displayed by Amon Hen.\nOptions: -h, --help show help for a command.\n"
+		return "Amon Hen — manage Bitwarden Secrets Manager machine-account keys\n\nUsage:\n  amonhen project add -N <name> -U <BWS-project-UUID> -T\n  amonhen project token set -N <name> -T\n  amonhen test token -N <project-name>\n  amonhen project list\n  amonhen project uuid -N <name>\n  amonhen ls\n  amonhen project delete -N <name>\n  amonhen project delete -U <BWS-project-UUID>\n  amonhen token -N <project-name> -- <command> [args...]\n  amonhen run <project-name> -- <command> [args...]\n  amonhen install\n  amonhen version | -V | --version\n\nProject tokens are stored in the OS credential store and never displayed by Amon Hen.\nOptions: -h, --help show help for a command.\n"
 	}
+}
+
+func testCommand(args []string) error {
+	if len(args) == 0 || isHelp(args[0]) {
+		fmt.Print(helpText("test"))
+		return nil
+	}
+	if args[0] != "token" {
+		return errors.New("usage: amonhen test token -N <project-name> (use --help for details)")
+	}
+	if containsHelp(args[1:]) {
+		fmt.Print(helpText("test token"))
+		return nil
+	}
+	opts, err := parseOptions(args[1:], map[string]bool{"name": true})
+	if err != nil {
+		return err
+	}
+	name := opts["name"]
+	if !validName(name) {
+		return errors.New("a valid project name is required with -N")
+	}
+	project, err := findProject(name)
+	if err != nil {
+		return err
+	}
+	token, err := keyring.Get(service, project.Name)
+	if err != nil {
+		return projectTokenReadError(project.Name, err)
+	}
+	defer clear([]byte(token))
+	if err := validateBwsToken(project.UUID, token); err != nil {
+		return fmt.Errorf("BWS token check failed for project %q: %w", project.Name, err)
+	}
+	fmt.Printf("Token for project %s can access BWS project %s.\n", project.Name, project.UUID)
+	return nil
+}
+
+func findProject(name string) (*Project, error) {
+	projects, err := loadProjects()
+	if err != nil {
+		return nil, err
+	}
+	for i := range projects {
+		if strings.EqualFold(projects[i].Name, name) {
+			return &projects[i], nil
+		}
+	}
+	return nil, fmt.Errorf("project %q not found", name)
+}
+
+type bwsCommandRunner func(env []string, args ...string) ([]byte, error)
+
+func runBwsCommand(env []string, args ...string) ([]byte, error) {
+	cmd := exec.Command("bws", args...)
+	cmd.Env = env
+	return cmd.CombinedOutput()
+}
+
+func validateBwsToken(uuid, token string) error {
+	return validateBwsTokenUsing(uuid, token, os.Environ(), runBwsCommand)
+}
+
+func validateBwsTokenUsing(uuid, token string, env []string, run bwsCommandRunner) error {
+	if !validUUID(uuid) {
+		return errors.New("configured BWS project UUID is invalid")
+	}
+	if token == "" {
+		return errors.New("stored token is empty")
+	}
+	output, err := run(withBWSAccessToken(env, token), "project", "get", uuid, "--output", "none")
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(strings.ReplaceAll(string(output), token, "[redacted]"))
+	if message == "" {
+		message = err.Error()
+	}
+	if len(message) > 512 {
+		message = message[:512] + "…"
+	}
+	return fmt.Errorf("could not verify token access to project %s: %s", uuid, message)
+}
+
+func validateTokenBeforeStore(uuid, token string, validate func(string, string) error, store func() error) error {
+	if err := validate(uuid, token); err != nil {
+		return fmt.Errorf("token was not stored because BWS validation failed: %w", err)
+	}
+	return store()
 }
 
 func tokenCommand(args []string) error {
@@ -263,9 +358,11 @@ func setProjectToken(args []string) error {
 		return err
 	}
 	found := false
+	projectUUID := ""
 	for _, project := range projects {
 		if strings.EqualFold(project.Name, name) {
 			name = project.Name
+			projectUUID = project.UUID
 			found = true
 			break
 		}
@@ -286,8 +383,10 @@ func setProjectToken(args []string) error {
 	if len(token) == 0 {
 		return errors.New("token cannot be empty")
 	}
-	if err := keyring.Set(service, name, string(token)); err != nil {
-		return fmt.Errorf("replace token for project %q in OS credential store: %w", name, err)
+	if err := validateTokenBeforeStore(projectUUID, string(token), validateBwsToken, func() error {
+		return keyring.Set(service, name, string(token))
+	}); err != nil {
+		return fmt.Errorf("replace token for project %q: %w", name, err)
 	}
 	fmt.Printf("Updated stored token for project %s.\n", name)
 	return nil
@@ -384,8 +483,10 @@ func addProject(args []string) error {
 	if len(token) == 0 {
 		return errors.New("token cannot be empty")
 	}
-	if err = keyring.Set(service, name, string(token)); err != nil {
-		return fmt.Errorf("store project token in OS credential store: %w", err)
+	if err = validateTokenBeforeStore(uuid, string(token), validateBwsToken, func() error {
+		return keyring.Set(service, name, string(token))
+	}); err != nil {
+		return fmt.Errorf("add project %q: %w", name, err)
 	}
 	projects = append(projects, Project{Name: name, UUID: uuid})
 	if err = saveProjects(projects); err != nil {

@@ -42,7 +42,9 @@ amonhen project add -N local-dev -U <BWS-project-UUID> -T
 UUID of the project in Bitwarden Secrets Manager. `-T` tells Amon Hen to prompt
 for that project's machine-account token without displaying the characters as
 you type. The token itself is not a command-line argument; do not paste it into
-the command. Amon Hen stores it in the operating system credential store.
+the command. Before saving it, Amon Hen makes a read-only BWS request to verify
+that the token can access the specified project. If validation fails or BWS is
+unreachable, the token is not saved.
 
 For example, if the BWS project UUID is
 `12345678-1234-4123-8123-123456789abc`, enter:
@@ -51,8 +53,9 @@ For example, if the BWS project UUID is
 amonhen project add -N local-dev -U 12345678-1234-4123-8123-123456789abc -T
 ```
 
-Then enter the machine-account token at the hidden prompt. The UUID above is an
-example; use the UUID of your own BWS project.
+Then enter the machine-account token at the hidden prompt. Amon Hen confirms
+that it can access the selected BWS project before saving the token. The UUID
+above is an example; use the UUID of your own BWS project.
 
 Repeat `project add` with a different project name and UUID to manage another
 machine-account token on the same machine. Each project has its own credential
@@ -69,10 +72,24 @@ amonhen project token set -N local-dev -T
 
 Enter the replacement machine-account token at the hidden prompt. Amon Hen
 updates the credential-store entry for the existing project. The token is not
-accepted as a command-line argument. If a credential is missing, `amonhen run`
-points to this recovery command. Other credential-store failures include the
-underlying system error so access or configuration problems are distinguishable
-from a missing token.
+accepted as a command-line argument. Amon Hen tests the replacement token
+against the project's BWS UUID before changing the credential store. If the
+test fails, the replacement is rejected and the existing stored token is left
+unchanged. If a credential is missing, `amonhen run` points to this recovery
+command. Other credential-store failures include the underlying system error
+so access or configuration problems are distinguishable from a missing token.
+
+## Test a stored token
+
+Check that a saved token is accepted by BWS and can access its configured
+project:
+
+```text
+amonhen test token -N local-dev
+```
+
+This makes a read-only BWS project request. It prints a success message or an
+error, never the token.
 
 ## List and delete projects
 
@@ -143,6 +160,8 @@ amonhen project add --help
 amonhen project list --help
 amonhen project uuid --help
 amonhen project token set --help
+amonhen test --help
+amonhen test token --help
 amonhen project delete --help
 amonhen token --help
 amonhen run --help
