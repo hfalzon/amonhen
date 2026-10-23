@@ -7,6 +7,8 @@ project name. Projects also record their BWS project UUID, so commands can use
 the matching credential. The secret values stored inside BWS remain managed by
 Bitwarden.
 
+> Amon Hen, known as the Hill of Sight (or Hill of the Eye), featured the Seat of Seeing, a high chair built within a stone-paved court.  It was here that Frodo Baggins, while wearing the One Ring, experienced visions of Mordor and decided to continue his journey alone.
+
 ## Install
 
 Install the official Bitwarden Secrets Manager CLI (`bws`) first. Download the
