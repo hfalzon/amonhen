@@ -25,6 +25,7 @@ func isolatedStore(t *testing.T) string {
 
 func TestMissingAuthoritativeStoreDoesNotUseLegacy(t *testing.T) {
 	isolatedStore(t)
+	t.Setenv("HOME", t.TempDir()) // macOS UserConfigDir uses HOME, not XDG_CONFIG_HOME.
 	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	legacy, err := legacyConfigPath()
@@ -44,6 +45,7 @@ func TestMissingAuthoritativeStoreDoesNotUseLegacy(t *testing.T) {
 
 func TestMigrationPreservesLegacyAndCredentials(t *testing.T) {
 	isolatedStore(t)
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	legacy, err := legacyConfigPath()
