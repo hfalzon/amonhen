@@ -28,6 +28,43 @@ To build from source, install Go 1.23 or later and run:
 go build -o amonhen ./cmd/amonhen
 ```
 
+On Windows, upgrade the executable and import an existing installation once
+from a normal host terminal:
+
+```text
+amonhen storage migrate
+```
+
+This copies project names and UUIDs into `%USERPROFILE%\.amonhen\projects.json`.
+It preserves the old file and leaves every existing OS credential unchanged.
+It refuses to overwrite an existing authoritative index or import a redirected
+AppData copy. The host and running agent read the new index on every lookup;
+adding, renaming or deleting projects requires no application or agent restart.
+Older executables still use the old file and must be upgraded too.
+
+For a new installation with no previous registry, run `amonhen storage init`
+before adding a project. On macOS and Linux the default metadata location
+remains the user configuration directory. All platforms now report an explicit
+error if the selected store is missing, inaccessible or invalid.
+
+`amonhen storage path` prints the selected path. For an isolated fixture or an
+explicit shared deployment, set `AMONHEN_CONFIG_DIR` to the same absolute,
+accessible directory in every client. There is no fallback to another registry.
+On Windows the store's opened file handle is checked; redirected or junction
+paths are rejected explicitly. Choose a direct directory outside AppData.
+
+Windows packaged applications can redirect AppData to a per-package copy even
+when environment variables and usernames match. This is independent of whether
+a command requests sandbox escalation. Keeping metadata outside AppData avoids
+that package view. The OS credential service and project account names remain
+unchanged; this change does not move tokens into metadata.
+
+In the tested MXC session, direct Credential Manager calls were denied. Token
+operations require approved host execution there; failures remain explicit and
+do not fall back to other credentials. Project discovery remains available in
+the sandbox. See [the investigation record](docs/sandbox-investigation.md) for
+the tested versions, evidence and remaining release checks.
+
 ## Add a project
 
 Create a BWS machine account with access to the BWS project you want to use.
@@ -122,6 +159,19 @@ amonhen project delete -U 12345678-1234-4123-8123-123456789abc
 
 Deleting a project also removes its saved token from the operating system
 credential store.
+
+Rename a project while preserving its saved credential:
+
+```text
+amonhen project rename -N local-dev --new-name renamed-dev
+```
+
+Mutations use an interprocess lock and atomic metadata replacement. A competing
+writer receives a retryable lock error instead of losing another writer's
+changes. Renaming creates the destination credential before committing metadata;
+the old credential is removed after the commit. A cleanup failure is reported
+explicitly. Interrupted credential/metadata operations are not a distributed
+transaction; unused credentials can remain after interruption.
 
 ## Pass a project's token to another process
 

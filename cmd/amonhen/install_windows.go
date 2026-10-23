@@ -81,6 +81,17 @@ func installSelf() error {
 }
 
 func copyExecutable(source, target string) error {
+	// A packaged desktop parent can redirect this install path too. Refuse to
+	// update a private executable copy while the host keeps running an older one.
+	if existing, err := openStore(target); err == nil {
+		verifyErr := verifyStoreHandle(existing, target)
+		_ = existing.Close()
+		if verifyErr != nil {
+			return fmt.Errorf("install from a normal host terminal: %w", verifyErr)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect installed executable: %w", err)
+	}
 	if sourceInfo, err := os.Stat(source); err == nil {
 		if targetInfo, targetErr := os.Stat(target); targetErr == nil && os.SameFile(sourceInfo, targetInfo) {
 			return nil
@@ -90,8 +101,26 @@ func copyExecutable(source, target string) error {
 	if err != nil {
 		return fmt.Errorf("read current executable: %w", err)
 	}
-	if err := os.WriteFile(target, data, 0700); err != nil {
-		return fmt.Errorf("install executable: %w", err)
+	f, err := os.CreateTemp(filepath.Dir(target), ".amonhen-install-*")
+	if err != nil {
+		return fmt.Errorf("create install transaction: %w", err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if err := verifyStoreHandle(f, f.Name()); err != nil {
+		return fmt.Errorf("install from a normal host terminal: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("write installed executable: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := replaceStore(f.Name(), target); err != nil {
+		return fmt.Errorf("commit installed executable: %w", err)
 	}
 	return nil
 }

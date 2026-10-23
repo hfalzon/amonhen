@@ -22,7 +22,7 @@ func check() error {
 	if err != nil {
 		return err
 	}
-	entries = append(entries, "scripts/check/main.go")
+	entries = append(entries, "scripts/check/main.go", "scripts/credential-probe/main.go")
 	cmd := exec.Command("gofmt", append([]string{"-l"}, entries...)...)
 	output, err := cmd.Output()
 	if err != nil {

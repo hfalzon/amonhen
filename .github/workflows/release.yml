@@ -81,4 +81,9 @@ jobs:
         run: |
           set -eu
           sha256sum dist/*.zip > dist/SHA256SUMS
-          gh release create "$VERSION" dist/*.zip dist/SHA256SUMS --verify-tag --generate-notes
+          notes="docs/releases/$VERSION.md"
+          if [ -f "$notes" ]; then
+            gh release create "$VERSION" dist/*.zip dist/SHA256SUMS --verify-tag --notes-file "$notes"
+          else
+            gh release create "$VERSION" dist/*.zip dist/SHA256SUMS --verify-tag --generate-notes
+          fi

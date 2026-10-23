@@ -194,6 +194,7 @@ func captureRun(args []string) (string, error) {
 }
 
 func TestListShowsNamesAndUUIDsButNoToken(t *testing.T) {
+	t.Setenv("AMONHEN_CONFIG_DIR", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("APPDATA", t.TempDir())
 	if err := saveProjects([]Project{{Name: "local-dev", UUID: "12345678-1234-4123-8123-123456789abc"}}); err != nil {
@@ -209,6 +210,7 @@ func TestListShowsNamesAndUUIDsButNoToken(t *testing.T) {
 }
 
 func TestProjectUUIDLookupByName(t *testing.T) {
+	t.Setenv("AMONHEN_CONFIG_DIR", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("APPDATA", t.TempDir())
 	const uuid = "12345678-1234-4123-8123-123456789abc"

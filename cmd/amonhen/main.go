@@ -1,14 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 
 	"github.com/zalando/go-keyring"
@@ -50,6 +47,8 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "storage":
+		return storageCommand(args[1:])
 	case "token":
 		return tokenCommand(args[1:])
 	case "project":
@@ -57,7 +56,11 @@ func run(args []string) error {
 	case "ls", "list":
 		return listProjects(args[1:])
 	case "delete":
-		return deleteProject(args[1:])
+		if containsHelp(args[1:]) {
+			fmt.Print(helpText("project delete"))
+			return nil
+		}
+		return withProjectLock(func() error { return deleteProject(args[1:]) })
 	case "install":
 		return installCommand(args[1:])
 	case "run":
@@ -71,13 +74,17 @@ func run(args []string) error {
 	}
 }
 
-func usage() error           { fmt.Print(helpText("")); return nil }
+func usage() error {
+	fmt.Print(helpText(""))
+	fmt.Println("\nStorage: amonhen storage <path|migrate|init>\nRename: amonhen project rename -N <name> --new-name <name>")
+	return nil
+}
 func isHelp(arg string) bool { return arg == "--help" || arg == "-h" }
 
 func helpText(topic string) string {
 	switch topic {
 	case "project":
-		return "Usage: amonhen project <add|list|uuid|token|delete>\n\nOptions:\n  -h, --help  Show this help\n"
+		return "Usage: amonhen project <add|list|uuid|token|rename|delete>\n\nOptions:\n  -h, --help  Show this help\n"
 	case "project add":
 		return "Usage: amonhen project add -N <name> -U <BWS-project-UUID> -T\n\nAdd a project. -T prompts for its machine-account token without echo; BWS access is checked before the token is stored. Raw tokens are not accepted as arguments.\n\nOptions:\n  -N, --name   Unique local project name\n  -U, --uuid   Bitwarden Secrets Manager project UUID\n  -T, --token  Prompt securely for the project machine-account token\n  -h, --help   Show this help\n"
 	case "project list":
@@ -174,18 +181,12 @@ func validateBwsTokenUsing(uuid, token string, env []string, run bwsCommandRunne
 	if token == "" {
 		return errors.New("stored token is empty")
 	}
-	output, err := run(withBWSAccessToken(env, token), "project", "get", uuid, "--output", "none")
+	_, err := run(withBWSAccessToken(env, token), "project", "get", uuid, "--output", "none")
 	if err == nil {
 		return nil
 	}
-	message := strings.TrimSpace(strings.ReplaceAll(string(output), token, "[redacted]"))
-	if message == "" {
-		message = err.Error()
-	}
-	if len(message) > 512 {
-		message = message[:512] + "…"
-	}
-	return fmt.Errorf("could not verify token access to project %s: %s", uuid, message)
+	// BWS diagnostics can contain credentials or secret values. Do not relay them.
+	return fmt.Errorf("could not verify token access to project %s; check BWS installation, connectivity, and machine-account permissions", uuid)
 }
 
 func validateTokenBeforeStore(uuid, token string, validate func(string, string) error, store func() error) error {
@@ -222,21 +223,11 @@ func tokenCommand(args []string) error {
 	if !validName(name) {
 		return errors.New("a valid project name is required with -N")
 	}
-	projects, err := loadProjects()
+	project, err := findProject(name)
 	if err != nil {
 		return err
 	}
-	found := false
-	for _, project := range projects {
-		if project.Name == name {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("project %q not found", name)
-	}
-	token, err := keyring.Get(service, name)
+	token, err := keyring.Get(service, project.Name)
 	if err != nil {
 		return projectTokenReadError(name, err)
 	}
@@ -274,12 +265,17 @@ func projectCommand(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "rename":
+		if containsHelp(args[1:]) {
+			return renameProject(args[1:])
+		}
+		return withProjectLock(func() error { return renameProject(args[1:]) })
 	case "add":
 		if containsHelp(args[1:]) {
 			fmt.Print(helpText("project add"))
 			return nil
 		}
-		return addProject(args[1:])
+		return withProjectLock(func() error { return addProject(args[1:]) })
 	case "list":
 		return listProjects(args[1:])
 	case "uuid":
@@ -297,13 +293,13 @@ func projectCommand(args []string) error {
 			fmt.Print(helpText("project token set"))
 			return nil
 		}
-		return projectTokenCommand(args[1:])
+		return withProjectLock(func() error { return projectTokenCommand(args[1:]) })
 	case "delete":
 		if containsHelp(args[1:]) {
 			fmt.Print(helpText("project delete"))
 			return nil
 		}
-		return deleteProject(args[1:])
+		return withProjectLock(func() error { return deleteProject(args[1:]) })
 	default:
 		return errors.New("usage: amonhen project <add|list|uuid|token|delete> (use --help for details)")
 	}
@@ -318,17 +314,12 @@ func projectUUID(args []string) error {
 	if !validName(name) {
 		return errors.New("a valid project name is required with -N")
 	}
-	projects, err := loadProjects()
+	project, err := findProject(name)
 	if err != nil {
 		return err
 	}
-	for _, project := range projects {
-		if project.Name == name {
-			fmt.Println(project.UUID)
-			return nil
-		}
-	}
-	return fmt.Errorf("project %q not found", name)
+	fmt.Println(project.UUID)
+	return nil
 }
 
 func projectTokenCommand(args []string) error {
@@ -419,9 +410,11 @@ func parseOptions(args []string, allowed map[string]bool) (map[string]string, er
 			key = "uuid"
 		case "-T", "--token":
 			key = "token"
+		case "--new-name":
+			key = "new-name"
 		}
 		if !allowed[key] {
-			return nil, fmt.Errorf("unexpected argument %q; tokens are entered only at the hidden prompt", args[i])
+			return nil, errors.New("unexpected argument; tokens are entered only at the hidden prompt")
 		}
 		if _, exists := values[key]; exists {
 			return nil, fmt.Errorf("option %q was provided more than once", args[i])
@@ -574,19 +567,9 @@ func runCommand(args []string) error {
 		return errors.New("usage: amonhen run <project-name> -- <command> [args...] (use --help for details)")
 	}
 	name := args[0]
-	projects, err := loadProjects()
+	project, err := findProject(name)
 	if err != nil {
 		return err
-	}
-	var project *Project
-	for i := range projects {
-		if projects[i].Name == name {
-			project = &projects[i]
-			break
-		}
-	}
-	if project == nil {
-		return fmt.Errorf("project %q not found", name)
 	}
 	token, err := keyring.Get(service, project.Name)
 	if err != nil {
@@ -630,49 +613,4 @@ func (e *commandExitError) Error() string {
 	return fmt.Sprintf("command exited with status %d", e.code)
 }
 
-func loadProjects() ([]Project, error) {
-	path, err := configPath()
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read project configuration: %w", err)
-	}
-	var projects []Project
-	if err := json.Unmarshal(data, &projects); err != nil {
-		return nil, errors.New("project configuration is invalid JSON")
-	}
-	return projects, nil
-}
-func saveProjects(projects []Project) error {
-	path, err := configPath()
-	if err != nil {
-		return err
-	}
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
-	}
-	data, err := json.MarshalIndent(projects, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err = os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("save project config: %w", err)
-	}
-	if err = os.Chmod(path, 0600); err != nil && runtime.GOOS != "windows" {
-		return fmt.Errorf("restrict project config permissions: %w", err)
-	}
-	return nil
-}
-func configPath() (string, error) {
-	root, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, appName, "projects.json"), nil
-}
 func validName(s string) bool { return regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(s) }
