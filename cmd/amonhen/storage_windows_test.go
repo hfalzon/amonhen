@@ -7,7 +7,35 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
+
+func TestStoreHandleAcceptsShortPathAlias(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "long-project-store-filename.json")
+	if err := os.WriteFile(path, []byte("[]"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]uint16, 32768)
+	n, err := windows.GetShortPathName(p, &buf[0], uint32(len(buf)))
+	if err != nil {
+		t.Skip("8.3 aliases unavailable on this volume")
+	}
+	short := windows.UTF16ToString(buf[:n])
+	f, err := openStore(short)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := verifyStoreHandle(f, short); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestInstallReplacesExecutableAtomically(t *testing.T) {
 	dir := t.TempDir()

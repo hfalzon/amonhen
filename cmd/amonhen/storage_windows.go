@@ -26,6 +26,19 @@ func verifyStoreHandle(f *os.File, expected string) error {
 	if err != nil {
 		return err
 	}
+	// 8.3 aliases (for example RUNNER~1 in Windows TEMP) name the same path,
+	// unlike a package-private AppData location. Expand spelling only; do not
+	// resolve the expected path through another opened handle or a junction.
+	wantPtr, err := windows.UTF16PtrFromString(want)
+	if err != nil {
+		return err
+	}
+	longBuf := make([]uint16, 32768)
+	longN, err := windows.GetLongPathName(wantPtr, &longBuf[0], uint32(len(longBuf)))
+	if err != nil || longN >= uint32(len(longBuf)) {
+		return fmt.Errorf("cannot normalize project store path; environment unsupported")
+	}
+	want = windows.UTF16ToString(longBuf[:longN])
 	if !strings.EqualFold(normalizeWindowsStorePath(actual), normalizeWindowsStorePath(want)) {
 		return fmt.Errorf("project store path is redirected (%s -> %s); refusing an alternative registry; use a shared directory outside AppData and run migration from a normal host terminal", expected, actual)
 	}
