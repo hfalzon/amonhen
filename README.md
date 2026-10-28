@@ -202,6 +202,57 @@ environment variables. The BWS machine-account token is passed to the BWS
 process through `BWS_ACCESS_TOKEN`; it is not included in the command arguments.
 Amon Hen does not fetch or store individual secret values.
 
+## Sandbox broker
+
+When an application runs in a sandbox that cannot access the OS credential
+store, Amon Hen can retrieve its configuration from a host process. Start the
+broker in a normal host terminal and leave it running:
+
+```text
+amonhen broker serve
+```
+
+In another host terminal, grant a Git repository access to one project:
+
+```text
+amonhen broker grant --repo C:\Projects\novelbinder --project novelbinder-dev --duration 8h
+```
+
+Use an absolute repository root on macOS and Linux. The default duration is
+eight hours; the maximum is 30 days. Each project and repository pair needs a
+grant. A grant stays valid across application and test restarts until its expiry
+or explicit revocation, including if the broker is restarted. End it early with:
+
+```text
+amonhen broker revoke --repo C:\Projects\novelbinder --project novelbinder-dev
+```
+
+The grant creates a random access key in `.amonlhaw/grants/` inside the
+repository. Amon Hen creates a `.amonlhaw/.gitignore` when one is absent and
+refuses to create a key unless Git reports that its path is ignored. Treat the
+key as a credential: anyone who can read it can request that project's entire
+configuration until expiry or revocation. File permissions and sandbox access
+must be appropriate for the repositories on the machine. The broker's host
+configuration directory must not be writable by sandboxed clients.
+
+With the normal Amon Lhaw Go loader and the default `bws` executable name,
+an available grant is detected automatically, including from nested test
+directories. Requests and encrypted responses use `.amonlhaw/requests/`.
+The BWS machine-account token stays in the host credential store and host BWS
+process; configuration values are decrypted by the client and installed into
+the application's environment. The temporary access key and encrypted files
+exist on disk. A process that can read both can decrypt the response.
+
+The broker runs the host's `bws` executable found on PATH. Ensure this PATH
+points to a trusted installation. It accepts only the project secret-list
+operation; it does not run caller-supplied commands. Keep the broker running
+while applications and tests start. If it is stopped or a grant expires,
+loading fails. Press Ctrl+C in the broker terminal to stop it.
+
+The mailbox transport has been exercised across a Windows sandbox boundary
+with synthetic values. macOS and Linux runtime behaviour, live BWS calls, and
+hostile concurrent changes to repository paths require further validation.
+
 ## Help and version
 
 ```text

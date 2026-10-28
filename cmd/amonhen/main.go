@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/zalando/go-keyring"
 	"golang.org/x/term"
@@ -49,6 +51,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "storage":
 		return storageCommand(args[1:])
+	case "broker":
+		return brokerCommand(args[1:])
 	case "token":
 		return tokenCommand(args[1:])
 	case "project":
@@ -76,7 +80,7 @@ func run(args []string) error {
 
 func usage() error {
 	fmt.Print(helpText(""))
-	fmt.Println("\nStorage: amonhen storage <path|migrate|init>\nRename: amonhen project rename -N <name> --new-name <name>")
+	fmt.Println("\nStorage: amonhen storage <path|migrate|init>\nRename: amonhen project rename -N <name> --new-name <name>\nBroker: amonhen broker <serve|grant|revoke|fetch>")
 	return nil
 }
 func isHelp(arg string) bool { return arg == "--help" || arg == "-h" }
@@ -226,6 +230,19 @@ func tokenCommand(args []string) error {
 	project, err := findProject(name)
 	if err != nil {
 		return err
+	}
+	// Amon Lhaw's existing BWS secret-list call can use an explicitly granted
+	// broker without passing a machine credential into the sandbox.
+	child := args[separator+1:]
+	binary := strings.TrimSuffix(strings.ToLower(filepath.Base(child[0])), ".exe")
+	if len(child) == 4 && binary == "bws" && child[1] == "secret" && child[2] == "list" && strings.EqualFold(child[3], project.UUID) {
+		_, _, grantErr := brokerFindClientGrant("", project.Name)
+		if grantErr == nil {
+			return brokerFetch("", project.Name, 30*time.Second)
+		}
+		if !errors.Is(grantErr, errBrokerGrantNotFound) {
+			return grantErr
+		}
 	}
 	token, err := keyring.Get(service, project.Name)
 	if err != nil {
