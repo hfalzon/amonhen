@@ -249,6 +249,19 @@ operation; it does not run caller-supplied commands. Keep the broker running
 while applications and tests start. If it is stopped or a grant expires,
 loading fails. Press Ctrl+C in the broker terminal to stop it.
 
+While serving, the broker prints one line for each request it handles, showing
+the time, success or failure, the granted repository, the project and a short
+reason. For example:
+
+```text
+2026-01-01T09:00:00+11:00 SUCCESS repo="C:\\Projects\\gadget" project="gadget-dev" reason=configuration-sent
+```
+
+This output is live in the broker terminal and is not saved as a log file. The
+repository shown is associated with the grant, not verified process identity.
+A client failure before it submits a request, such as an expired local key or
+a stopped broker, cannot appear in the broker terminal.
+
 The mailbox transport has been exercised across a Windows sandbox boundary
 with synthetic values. macOS and Linux runtime behaviour, live BWS calls, and
 hostile concurrent changes to repository paths require further validation.

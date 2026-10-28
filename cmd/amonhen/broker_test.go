@@ -76,7 +76,13 @@ func TestBrokerAuthenticatedResponseAndRevocation(t *testing.T) {
 		}
 	}
 	writeRequest()
-	brokerHandle(grant, path, base)
+	event := brokerHandle(grant, path, base)
+	if event == nil || event.Outcome != "SUCCESS" || event.Repo != root || event.Project != grant.Project || event.Reason != "configuration-sent" {
+		t.Fatalf("unexpected success event: %+v", event)
+	}
+	if strings.Contains(event.String(), "synthetic-value") || strings.Contains(event.String(), string(key)) {
+		t.Fatal("event exposed secret data")
+	}
 	response := strings.TrimSuffix(path, ".req") + ".res"
 	ciphertext, err := os.ReadFile(response)
 	if err != nil {
@@ -104,9 +110,42 @@ func TestBrokerAuthenticatedResponseAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeRequest()
-	brokerHandle(grant, path, base)
+	event = brokerHandle(grant, path, base)
+	if event == nil || event.Outcome != "FAIL" || event.Reason != "grant-expired-or-revoked" {
+		t.Fatalf("unexpected revocation event: %+v", event)
+	}
 	if _, err = os.Stat(response); !os.IsNotExist(err) {
 		t.Fatal("revoked grant produced a response")
+	}
+}
+
+func TestBrokerFailureEvent(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AMONHEN_CONFIG_DIR", filepath.Join(root, "host"))
+	if err := os.MkdirAll(filepath.Join(root, "host"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("01234567890123456789012345678901")
+	g := brokerGrant{ID: strings.Repeat("a", 32), Repo: root, Project: "project", Expires: time.Now().Add(time.Hour)}
+	if err := brokerSaveGrants([]brokerGrant{g}); err != nil {
+		t.Fatal(err)
+	}
+	oldKey, oldSecrets := brokerGetKey, brokerGetSecrets
+	t.Cleanup(func() { brokerGetKey, brokerGetSecrets = oldKey, oldSecrets })
+	brokerGetKey = func(string, string) (string, error) { return base64.RawStdEncoding.EncodeToString(key), nil }
+	brokerGetSecrets = func(brokerGrant) ([]byte, error) { return nil, fmt.Errorf("synthetic secret error") }
+	base := g.ID + "." + strings.Repeat("b", 32)
+	path := filepath.Join(root, base+".req")
+	request, err := brokerSeal(key, []byte("secret-list"), "request:"+base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, request, 0600); err != nil {
+		t.Fatal(err)
+	}
+	event := brokerHandle(g, path, base)
+	if event == nil || event.Outcome != "FAIL" || event.Reason != "configuration-unavailable" || strings.Contains(event.String(), "synthetic secret error") {
+		t.Fatalf("unexpected failure event: %+v", event)
 	}
 }
 

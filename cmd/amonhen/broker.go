@@ -46,6 +46,15 @@ type brokerResponse struct {
 	Error string          `json:"error,omitempty"`
 }
 
+type brokerEvent struct {
+	Time                           time.Time
+	Repo, Project, Outcome, Reason string
+}
+
+func (e brokerEvent) String() string {
+	return fmt.Sprintf("%s %s repo=%q project=%q reason=%s", e.Time.Format(time.RFC3339), e.Outcome, e.Repo, e.Project, e.Reason)
+}
+
 type brokerLimitedBuffer struct{ bytes.Buffer }
 
 func (b *brokerLimitedBuffer) Write(p []byte) (int, error) {
@@ -121,7 +130,7 @@ func brokerCommand(args []string) error {
 func brokerHelp(topic string) string {
 	switch topic {
 	case "serve":
-		return "Usage: amonhen broker serve\n\nRun the broker in a normal host terminal. It handles granted configuration requests until stopped with Ctrl+C.\n"
+		return "Usage: amonhen broker serve\n\nRun the broker in a normal host terminal. Each request handled is shown live with its outcome, repository and project. The broker runs until stopped with Ctrl+C.\n"
 	case "grant":
 		return "Usage: amonhen broker grant --repo <repository-root> --project <name> [--duration <duration>]\n\nExample:\n  amonhen broker grant --repo C:\\Projects\\gadget --project gadget-dev --duration 8h\n\n--repo       Path to the root of the Git repository.\n--project    Project name from 'amonhen ls'.\n--duration   Access lifetime, for example 8h or 30m; defaults to 8h, maximum 720h.\n\nCreates a local access key for the project. Anyone who can read the key can request that project's configuration until it expires or is revoked.\n"
 	case "revoke":
@@ -556,9 +565,6 @@ func brokerServe() error {
 			return fmt.Errorf("broker grant store: %w", e)
 		}
 		for _, g := range grants {
-			if !time.Now().Before(g.Expires) {
-				continue
-			}
 			dir := filepath.Join(g.Repo, ".amonlhaw", "requests")
 			entries, e := os.ReadDir(dir)
 			if e != nil {
@@ -591,7 +597,9 @@ func brokerServe() error {
 				case limit <- struct{}{}:
 					go func(g brokerGrant, path, base string) {
 						defer func() { <-limit; mu.Lock(); delete(active, path); mu.Unlock() }()
-						brokerHandle(g, path, base)
+						if event := brokerHandle(g, path, base); event != nil {
+							fmt.Println(event.String())
+						}
 					}(g, path, base)
 				default:
 					mu.Lock()
@@ -604,43 +612,50 @@ func brokerServe() error {
 	}
 }
 
-func brokerHandle(g brokerGrant, path, base string) {
+func brokerHandle(g brokerGrant, path, base string) *brokerEvent {
+	event := &brokerEvent{Time: time.Now(), Repo: g.Repo, Project: g.Project, Outcome: "FAIL", Reason: "mailbox-unavailable"}
 	if err := brokerCheckDir(g.Repo, filepath.Dir(path)); err != nil {
-		return
+		return event
 	}
 	defer os.Remove(path)
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return
+		return nil
 	}
 	if err != nil || len(b) > 4096 {
-		fmt.Fprintln(os.Stderr, "broker request failed: unable to read request")
-		return
+		event.Reason = "invalid-request"
+		return event
 	}
 	encoded, err := brokerGetKey(brokerKeyService, g.ID)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "broker request failed: grant key unavailable")
-		return
+		event.Reason = "grant-key-unavailable"
+		return event
 	}
 	key, err := base64.RawStdEncoding.DecodeString(encoded)
 	if err != nil || len(key) != 32 {
-		fmt.Fprintln(os.Stderr, "broker request failed: invalid grant key")
-		return
+		event.Reason = "invalid-grant-key"
+		return event
 	}
 	plain, err := brokerOpen(key, b, "request:"+base)
-	if err != nil || string(plain) != "secret-list" || !time.Now().Before(g.Expires) {
-		fmt.Fprintln(os.Stderr, "broker request rejected")
-		return
+	if err != nil || string(plain) != "secret-list" {
+		event.Reason = "request-rejected"
+		return event
+	}
+	if !time.Now().Before(g.Expires) {
+		event.Reason = "grant-expired"
+		return event
 	}
 	data, err := brokerGetSecrets(g)
 	result := brokerResponse{Data: data}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "broker request failed: project configuration unavailable")
+		event.Reason = "configuration-unavailable"
 		result = brokerResponse{Error: "broker could not fetch project configuration"}
 	}
+	providerFailed := err != nil
 	grants, err := brokerLoadGrants()
 	if err != nil {
-		return
+		event.Reason = "grant-store-unavailable"
+		return event
 	}
 	allowed := false
 	for _, current := range grants {
@@ -650,21 +665,29 @@ func brokerHandle(g brokerGrant, path, base string) {
 		}
 	}
 	if !allowed {
-		fmt.Fprintln(os.Stderr, "broker request rejected: grant expired or revoked")
-		return
+		event.Reason = "grant-expired-or-revoked"
+		return event
 	}
 	if err := brokerCheckDir(g.Repo, filepath.Dir(path)); err != nil {
-		return
+		event.Reason = "mailbox-unavailable"
+		return event
 	}
 	payload, err := json.Marshal(result)
 	if err != nil {
-		return
+		event.Reason = "response-encoding-failed"
+		return event
 	}
 	sealed, err := brokerSeal(key, payload, "response:"+base)
 	if err != nil {
-		return
+		event.Reason = "response-encryption-failed"
+		return event
 	}
 	if err := brokerAtomicWrite(strings.TrimSuffix(path, ".req")+".res", sealed, 0600); err != nil {
-		fmt.Fprintln(os.Stderr, "broker request failed: response could not be written")
+		event.Reason = "response-write-failed"
+		return event
 	}
+	if !providerFailed {
+		event.Outcome, event.Reason = "SUCCESS", "configuration-sent"
+	}
+	return event
 }
