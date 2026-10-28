@@ -61,6 +61,18 @@ var brokerDeleteKey = keyring.Delete
 var errBrokerGrantNotFound = errors.New("broker grant not found")
 
 func brokerCommand(args []string) error {
+	if len(args) > 0 && args[0] == "help" {
+		topic := ""
+		if len(args) > 1 {
+			topic = args[1]
+		}
+		fmt.Print(brokerHelp(topic))
+		return nil
+	}
+	if len(args) > 1 && args[1] == "help" {
+		fmt.Print(brokerHelp(args[0]))
+		return nil
+	}
 	if len(args) == 0 || containsHelp(args) {
 		topic := ""
 		if len(args) > 0 && !isHelp(args[0]) {
@@ -74,13 +86,25 @@ func brokerCommand(args []string) error {
 	repo := f.String("repo", "", "repository directory")
 	project := f.String("project", "", "project name")
 	duration := f.Duration("duration", 8*time.Hour, "grant lifetime")
-	if err := f.Parse(args[1:]); err != nil || f.NArg() != 0 {
-		return errors.New("invalid broker options; use --repo, --project and --duration")
+	if err := f.Parse(args[1:]); err != nil {
+		return fmt.Errorf("%v\n\n%s", err, brokerHelp(args[0]))
+	}
+	if f.NArg() != 0 {
+		return fmt.Errorf("unexpected argument %q\n\n%s", f.Arg(0), brokerHelp(args[0]))
 	}
 	switch args[0] {
 	case "grant":
+		if *repo == "" || *project == "" {
+			return fmt.Errorf("grant requires both --repo and --project\n\n%s", brokerHelp("grant"))
+		}
+		if *duration <= 0 || *duration > 30*24*time.Hour {
+			return errors.New("--duration must be positive and no longer than 720h; for example, --duration 8h")
+		}
 		return brokerCreateGrant(*repo, *project, *duration)
 	case "revoke":
+		if *repo == "" || *project == "" {
+			return fmt.Errorf("revoke requires both --repo and --project\n\n%s", brokerHelp("revoke"))
+		}
 		return brokerRevokeGrant(*repo, *project)
 	case "serve":
 		if *repo != "" || *project != "" {
@@ -99,13 +123,13 @@ func brokerHelp(topic string) string {
 	case "serve":
 		return "Usage: amonhen broker serve\n\nRun the broker in a normal host terminal. It handles granted configuration requests until stopped with Ctrl+C.\n"
 	case "grant":
-		return "Usage: amonhen broker grant --repo <repository-root> --project <name> [--duration <duration>]\n\nCreate an access key in the repository for the selected project. The duration defaults to 8h and must not exceed 720h. The key is a credential; anyone who can read it can request the project's configuration.\n"
+		return "Usage: amonhen broker grant --repo <repository-root> --project <name> [--duration <duration>]\n\nExample:\n  amonhen broker grant --repo C:\\Projects\\gadget --project gadget-dev --duration 8h\n\n--repo       Path to the root of the Git repository.\n--project    Project name from 'amonhen ls'.\n--duration   Access lifetime, for example 8h or 30m; defaults to 8h, maximum 720h.\n\nCreates a local access key for the project. Anyone who can read the key can request that project's configuration until it expires or is revoked.\n"
 	case "revoke":
 		return "Usage: amonhen broker revoke --repo <repository-root> --project <name>\n\nRevoke a repository's project grant and remove its access key.\n"
 	case "fetch":
 		return "Usage: amonhen broker fetch [--repo <repository-root>] --project <name>\n\nFetch configuration through the broker. Output contains secrets. Amon Lhaw normally uses the broker automatically.\n"
 	default:
-		return "Usage: amonhen broker <serve|grant|revoke|fetch>\n\nRun serve on the host, then grant a repository timed access to a project. Amon Lhaw can reuse that grant across application and test runs.\n\n  amonhen broker serve\n  amonhen broker grant --repo <repository-root> --project <name> --duration 8h\n  amonhen broker revoke --repo <repository-root> --project <name>\n\nUse 'amonhen broker <command> --help' for details.\n"
+		return "Usage: amonhen broker <serve|grant|revoke|fetch>\n\n1. Start the broker in a normal host terminal and leave it running:\n     amonhen broker serve\n2. In another terminal, grant a repository access to a project:\n     amonhen broker grant --repo C:\\Projects\\gadget --project gadget-dev --duration 8h\n   Use 'amonhen ls' to see project names. Amon Lhaw then uses the grant automatically.\n3. To revoke access early:\n     amonhen broker revoke --repo C:\\Projects\\gadget --project gadget-dev\n\nUse 'amonhen broker help grant' or 'amonhen broker grant --help' for command details.\n"
 	}
 }
 

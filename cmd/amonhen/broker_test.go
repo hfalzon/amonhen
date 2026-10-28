@@ -19,6 +19,9 @@ func TestBrokerCommandHelp(t *testing.T) {
 		want string
 	}{
 		{[]string{"broker", "--help"}, "broker grant --repo"},
+		{[]string{"broker", "help"}, "broker grant --repo"},
+		{[]string{"broker", "help", "grant"}, "--duration"},
+		{[]string{"broker", "grant", "help"}, "--project"},
 		{[]string{"broker", "grant", "--help"}, "--duration"},
 		{[]string{"broker", "serve", "--help"}, "Ctrl+C"},
 		{[]string{"broker", "revoke", "--help"}, "--project"},
@@ -27,6 +30,20 @@ func TestBrokerCommandHelp(t *testing.T) {
 		out, err := captureRun(tc.args)
 		if err != nil || !strings.Contains(out, tc.want) {
 			t.Fatalf("help %v: %q, %v", tc.args, out, err)
+		}
+	}
+}
+
+func TestBrokerGrantErrorsShowHelp(t *testing.T) {
+	for _, args := range [][]string{
+		{"broker", "grant"},
+		{"broker", "grant", "--repo", "example"},
+		{"broker", "grant", "--repo", "example", "--duration", "8h"},
+		{"broker", "grant", "--repo", "example", "--valid", "8h"},
+	} {
+		_, err := captureRun(args)
+		if err == nil || !strings.Contains(err.Error(), "--project") || !strings.Contains(err.Error(), "--duration") || !strings.Contains(err.Error(), "Example:") {
+			t.Fatalf("grant error %v did not explain usage: %v", args, err)
 		}
 	}
 }
